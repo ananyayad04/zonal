@@ -71,6 +71,7 @@ class Session extends ChangeNotifier {
       'role': switch (role) {
         Role.worker => 'WORKER',
         Role.officer => 'OFFICER',
+        Role.student => 'STUDENT',
         _ => 'RESIDENT',
       },
       if (phone != null && phone.isNotEmpty) 'phone': phone,

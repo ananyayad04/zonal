@@ -109,6 +109,7 @@ class _EscalationsScreenState extends State<EscalationsScreen> {
                   final c = complaints[i];
                   return ComplaintCard(
                     complaint: c,
+                    showReporterKind: true,
                     onTap: () async {
                       await Navigator.of(context).push(
                         MaterialPageRoute(

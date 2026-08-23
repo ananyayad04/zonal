@@ -114,15 +114,20 @@ const LANDMARKS = [
   { name: 'DSA', category: 'DEPARTMENT', zone: 7 },
 
   // Boys hostels
-  { name: 'Raman Hostel', category: 'BOYS_HOSTEL', zone: 2 },
-  { name: 'Ambedkar Hostel', category: 'BOYS_HOSTEL', zone: 2 },
-  { name: 'Subhash Hostel', category: 'BOYS_HOSTEL', zone: 2 },
-  { name: 'VS Hostel', category: 'BOYS_HOSTEL', zone: 2 },
-  { name: 'Tagore Hostel', category: 'BOYS_HOSTEL', zone: 2 },
+  { name: 'Raman Bhawan', category: 'BOYS_HOSTEL', zone: 2 },
+  { name: 'Subhash Bhawan', category: 'BOYS_HOSTEL', zone: 2 },
+  { name: 'Visveswarya Bhawan', category: 'BOYS_HOSTEL', zone: 2 },
+  { name: 'Tagore Bhawan', category: 'BOYS_HOSTEL', zone: 2 },
+  { name: 'Ambedkar Bhawan', category: 'BOYS_HOSTEL', zone: 2 },
+  { name: 'Tilak Bhawan', category: 'BOYS_HOSTEL', zone: 2 },
+  { name: 'Ramanujam Bhawan', category: 'BOYS_HOSTEL', zone: 2 },
 
   // Girls hostels
   { name: 'Saraswati Hostel', category: 'GIRLS_HOSTEL', zone: 4 },
-  { name: 'New Girls Hostel', category: 'GIRLS_HOSTEL', zone: 4 },
+  { name: 'Sarojani Bhawan', category: 'GIRLS_HOSTEL', zone: 4 },
+  { name: 'Kalpana Chawla Bhawan', category: 'GIRLS_HOSTEL', zone: 4 },
+  { name: 'Kasturba Bhawan', category: 'GIRLS_HOSTEL', zone: 4 },
+  { name: 'Savitribai Phule Bhawan', category: 'GIRLS_HOSTEL', zone: 4 },
 
   // Shared facilities
   { name: 'Main Gate', category: 'FACILITY', zone: 1 },
@@ -139,6 +144,15 @@ const RESIDENTS = [
   { name: 'Neha Gupta', email: 'neha@campus.edu' },
   { name: 'Karan Mehta', email: 'karan@campus.edu' },
   { name: 'Sneha Patil', email: 'sneha@campus.edu' },
+];
+
+/// A second reporting community. Their complaints are visible to each other
+/// and to staff, and never to the residents above - which is the whole point
+/// of having both in the demo data.
+const STUDENTS = [
+  { name: 'Rohit Yadav', email: 'rohit@campus.edu' },
+  { name: 'Priya Singh', email: 'priya@campus.edu' },
+  { name: 'Aman Verma', email: 'aman@campus.edu' },
 ];
 
 const slug = (name) => name.toLowerCase().replace(/[^a-z]+/g, '.');
@@ -311,12 +325,27 @@ async function main() {
   }
   console.log(`  ${RESIDENTS.length} residents created`);
 
+  // --- 7. Students -------------------------------------------------------
+  for (const [i, st] of STUDENTS.entries()) {
+    await prisma.user.create({
+      data: {
+        name: st.name,
+        email: st.email,
+        phone: `9300000${String(i).padStart(3, '0')}`,
+        passwordHash,
+        role: 'STUDENT',
+      },
+    });
+  }
+  console.log(`  ${STUDENTS.length} students created`);
+
   console.log('\nDemo logins (password for every account: ' + DEMO_PASSWORD + ')');
   console.log('  Admin     admin@campus.edu');
   console.log('  Officer   officer1@campus.edu  ... officer8@campus.edu');
   console.log('  Worker    ramesh.kumar@campus.edu   (Zone 1, approved)');
   console.log('  Worker    salim.ansari@campus.edu   (Zone 1, PENDING approval)');
   console.log('  Resident  aditya@campus.edu');
+  console.log('  Student   rohit@campus.edu');
   console.log('\nCampus centre: ' + env.campusCenterLat + ', ' + env.campusCenterLng);
   console.log('Seed complete.\n');
 }

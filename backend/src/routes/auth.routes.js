@@ -89,7 +89,7 @@ const registerSchema = z.object({
   email: emailField,
   phone: z.string().min(10).max(15).optional(),
   password: z.string().min(6, 'Password must be at least 6 characters'),
-  role: z.enum(['RESIDENT', 'WORKER', 'OFFICER']).default('RESIDENT'),
+  role: z.enum(['RESIDENT', 'STUDENT', 'WORKER', 'OFFICER']).default('RESIDENT'),
   // Workers pick the zone they will serve; officers the zone they want to run
   zoneCode: z.coerce.number().int().min(1).max(8).optional(),
 });
@@ -100,7 +100,9 @@ const VERIFIED_ROLES = new Set(['WORKER', 'OFFICER']);
 /**
  * POST /api/auth/register
  *
- * Residents are usable immediately. Workers and Officers are created PENDING
+ * Residents and Students are usable immediately - they differ only in which
+ * community feed their complaints appear in, which is no reason to make
+ * someone wait. Workers and Officers are created PENDING
  * and can do nothing until the Admin verifies them - that gate lives in
  * `requireApprovedWorker` for workers, and in `requireApprovedOfficer` for
  * officers.

@@ -143,12 +143,21 @@ export async function broadcastEmergency(complaint, { actor = null } = {}) {
       select: { userId: true },
     }),
     prisma.user.findMany({ where: { role: 'ADMIN' }, select: { id: true } }),
-    // Residents get it too, as a safety warning rather than a work order.
-    // Flooding, sewage or broken glass is something people nearby need to know
-    // about so they can avoid it - not just something for staff to clean up.
-    // The person who reported it is excluded; they already know.
+    // Residents and students get it too, as a safety warning rather than a
+    // work order. Flooding, sewage or broken glass is something people nearby
+    // need to know about so they can avoid it - not just something for staff
+    // to clean up.
+    //
+    // Both communities are told, regardless of which one reported it. The
+    // audience split exists so the two do not read each other's day-to-day
+    // complaints; it is not a reason to let someone walk into a hazard. The
+    // person who reported it is excluded; they already know.
     prisma.user.findMany({
-      where: { role: 'RESIDENT', isActive: true, NOT: { id: complaint.reporterId } },
+      where: {
+        role: { in: ['RESIDENT', 'STUDENT'] },
+        isActive: true,
+        NOT: { id: complaint.reporterId },
+      },
       select: { id: true },
     }),
   ]);

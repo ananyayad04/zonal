@@ -125,7 +125,10 @@ export const env = {
   slaOfficerAllotHours: num('SLA_OFFICER_ALLOT_HOURS', 0.5),
   slaWorkerCompleteHours: num('SLA_WORKER_COMPLETE_HOURS', 24),
   helpRequestExpiryHours: num('HELP_REQUEST_EXPIRY_HOURS', 0.5),
-  autoCloseHours: num('AUTO_CLOSE_HOURS', 72),
+  /// 0 disables auto-closing entirely, which is the default: a complaint is
+  /// closed by the person who filed it or not at all. Set a positive number of
+  /// hours only if you deliberately want a backstop.
+  autoCloseHours: num('AUTO_CLOSE_HOURS', 0),
   maxReopenCount: num('MAX_REOPEN_COUNT', 1),
   maxTasksPerWorker: num('MAX_TASKS_PER_WORKER', 1),
 

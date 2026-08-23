@@ -67,6 +67,7 @@ class AppDrawer extends StatelessWidget {
 
     final roleLabel = switch (user.role) {
       Role.resident => 'Resident',
+      Role.student => 'Student',
       Role.worker => 'Cleaning worker',
       Role.officer => 'Zone officer',
       Role.admin => 'Campus admin',

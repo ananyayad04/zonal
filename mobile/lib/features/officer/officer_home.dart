@@ -216,6 +216,7 @@ class _OfficerHomeState extends State<OfficerHome> {
                     for (final c in queue)
                       ComplaintCard(
                         complaint: c,
+                        showReporterKind: true,
                         onTap: () => _open(c),
                         action: c.status == 'UNDER_REVIEW'
                             ? Column(

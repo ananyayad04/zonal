@@ -39,7 +39,7 @@ export async function withMediaUrls(payload) {
 export const complaintInclude = {
   zone: { select: { id: true, code: true, name: true, label: true, colorHex: true } },
   lendingZone: { select: { id: true, code: true, name: true } },
-  reporter: { select: { id: true, name: true, phone: true } },
+  reporter: { select: { id: true, name: true, phone: true, role: true } },
   assignedOfficer: { select: { id: true, name: true, phone: true } },
   assignedWorker: { select: { id: true, name: true, phone: true } },
   media: true,
@@ -71,7 +71,14 @@ export function serializeMedia(m) {
   };
 }
 
-export function serializeComplaint(c) {
+/**
+ * @param c          the complaint, loaded with `complaintInclude`
+ * @param opts.peer  true when this is going to someone who merely shares the
+ *                   reporter's community, rather than to staff working the
+ *                   complaint. Peers get the report; they do not get a phone
+ *                   number for the person who filed it.
+ */
+export function serializeComplaint(c, opts = {}) {
   if (!c) return null;
 
   const media = c.media ?? [];
@@ -114,7 +121,15 @@ export function serializeComplaint(c) {
       c.zoneResolvedBy != null &&
       !['POLYGON', 'RESIDENT_OVERRIDE', 'ADMIN_OVERRIDE'].includes(c.zoneResolvedBy),
 
-    reporter: c.reporter,
+    // Who filed it, and which community they filed into. Staff see the role
+    // so they can tell a student report from a resident one; peers see it
+    // because it is their own community either way.
+    reporter: opts.peer
+      ? { id: c.reporter?.id, name: c.reporter?.name, role: c.reporterRole }
+      : c.reporter
+        ? { ...c.reporter, role: c.reporter.role ?? c.reporterRole }
+        : null,
+    reporterRole: c.reporterRole,
     officer: c.assignedOfficer,
     worker: c.assignedWorker,
 
@@ -125,6 +140,8 @@ export function serializeComplaint(c) {
     afterMedia: media.filter((m) => m.phase === 'AFTER').map(serializeMedia),
 
     satisfaction: c.satisfaction,
+    /// What the reporter said when they signed the work off.
+    feedbackNote: c.feedbackNote,
     unsatisfiedNote: c.unsatisfiedNote,
     reopenCount: c.reopenCount,
     rejectionReason: c.rejectionReason,

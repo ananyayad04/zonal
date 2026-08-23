@@ -20,12 +20,19 @@ class ComplaintCard extends StatelessWidget {
   /// the resident's confirm/reject pair.
   final Widget? action;
 
+  /// Show who filed it - Resident or Student. Staff screens turn this on so a
+  /// student report can be told from a resident one without opening it. The
+  /// community feeds leave it off: everything there is from one community
+  /// already, so a badge on every row would say nothing.
+  final bool showReporterKind;
+
   const ComplaintCard({
     super.key,
     required this.complaint,
     this.onTap,
     this.trailing,
     this.action,
+    this.showReporterKind = false,
   });
 
   @override
@@ -88,6 +95,11 @@ class ComplaintCard extends StatelessWidget {
                             ),
                           ],
                         ),
+                        const SizedBox(height: 7),
+                      ],
+                      if (showReporterKind &&
+                          reporterRoles.contains(complaint.reporterRole)) ...[
+                        _ReporterKindBadge(role: complaint.reporterRole),
                         const SizedBox(height: 7),
                       ],
                       Row(
@@ -277,4 +289,49 @@ class ComplaintCard extends StatelessWidget {
 
 extension _FirstOrNull<E> on Iterable<E> {
   E? get firstOrNull => isEmpty ? null : first;
+}
+
+/// Says whether a complaint came from the resident community or the student
+/// one. Shown only to staff, who work both.
+class _ReporterKindBadge extends StatelessWidget {
+  const _ReporterKindBadge({required this.role});
+
+  final Role role;
+
+  @override
+  Widget build(BuildContext context) {
+    final isStudent = role == Role.student;
+    // Two of the colourblind-safe hues, kept distinct from the status colours
+    // so a badge is never mistaken for a state.
+    final color = isStudent ? const Color(0xFF7A52CC) : const Color(0xFF0072B2);
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(5),
+        border: Border.all(color: color.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            isStudent ? Icons.school_outlined : Icons.home_outlined,
+            size: 11,
+            color: color,
+          ),
+          const SizedBox(width: 4),
+          Text(
+            isStudent ? 'STUDENT' : 'RESIDENT',
+            style: TextStyle(
+              fontSize: 9.5,
+              letterSpacing: 0.9,
+              fontWeight: FontWeight.w800,
+              color: color,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }

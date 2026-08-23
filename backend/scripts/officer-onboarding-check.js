@@ -59,9 +59,22 @@ const taken = new Set(
 const freeZone = zones.find((z) => !taken.has(z.code));
 const takenZone = zones.find((z) => taken.has(z.code));
 
-if (!freeZone) {
-  console.error('\n  Every zone already has an officer; nothing to test against.\n');
-  process.exit(1);
+// The dev seed appoints an officer to every zone, so there is nothing to
+// apply for. Vacate one rather than depending on how the database was seeded:
+// the test should work against a fresh install and a full one alike.
+let openZone = freeZone;
+if (!openZone) {
+  const victim = zones[zones.length - 1];
+  const vacated = await api(`/admin/zones/${victim.code}`, {
+    method: 'PUT',
+    token: admin,
+    body: { officerId: null },
+  });
+  if (!vacated.ok) {
+    console.error(`  Could not free a zone to test with: ${vacated.body.error ?? vacated.status}`);
+    process.exit(1);
+  }
+  openZone = victim;
 }
 
 // --- registering -----------------------------------------------------------
@@ -71,7 +84,7 @@ const applicant = {
   password: 'password123',
   phone: `9${String(stamp).slice(-9)}`,
   role: 'OFFICER',
-  zoneCode: freeZone.code,
+  zoneCode: openZone.code,
 };
 
 const reg = await api('/auth/register', { method: 'POST', body: applicant });
@@ -126,7 +139,7 @@ const asWorker = await api('/auth/register', {
     password: 'password123',
     phone: `7${String(stamp).slice(-9)}`,
     role: 'WORKER',
-    zoneCode: freeZone.code,
+    zoneCode: openZone.code,
   },
 });
 check('workers still register normally', asWorker.status === 201);
@@ -139,7 +152,7 @@ check(
 const queue = await api('/admin/officers?status=PENDING', { token: admin });
 const mine = (queue.body.officers ?? []).find((o) => o.email === applicant.email);
 check('the application appears in the admin queue', Boolean(mine));
-check('the queue names the zone applied for', mine?.zone?.code === freeZone.code);
+check('the queue names the zone applied for', mine?.zone?.code === openZone.code);
 check('the queue reports whether that zone is free', mine?.zoneIsTaken === false);
 
 const dash = await api('/admin/dashboard', { token: admin });
@@ -158,7 +171,7 @@ const approve = await api(`/admin/officers/${mine?.userId}/verify`, {
 check('the admin can approve', approve.ok, approve.body.error ?? '');
 
 const after = await api('/auth/me', { token: officerToken });
-check('approval grants the zone', after.body.user?.zone?.code === freeZone.code);
+check('approval grants the zone', after.body.user?.zone?.code === openZone.code);
 check('the application reads ACTIVE', after.body.user?.officer?.approvalStatus === 'ACTIVE');
 
 const nowAllowed = await api('/officer/complaints', { token: officerToken });

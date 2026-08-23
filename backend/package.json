@@ -26,7 +26,9 @@
     "test:draw": "node prisma/seed.js && node scripts/draw-zone-check.js",
     "test:allotment": "node prisma/seed.js && node scripts/allotment-audit.js",
     "test:ratelimit": "node scripts/ratelimit-check.js",
-    "test:all": "npm run test:geo && npm run test:draw && npm run test:allotment && npm run test:e2e && npm run test:emergency && npm run demo:reset",
+    "test:audiences": "node prisma/seed.js && node scripts/audience-check.js",
+    "test:officers": "node prisma/seed.js && node scripts/officer-onboarding-check.js",
+    "test:all": "npm run test:geo && npm run test:draw && npm run test:allotment && npm run test:officers && npm run test:audiences && npm run test:e2e && npm run test:emergency && npm run demo:reset",
     "demo:reset": "node prisma/seed.js && node scripts/confirm-clean.js",
     "demo:data": "node prisma/seed.js && node scripts/demo-data.js"
   },

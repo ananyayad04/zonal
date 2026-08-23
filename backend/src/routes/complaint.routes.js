@@ -252,6 +252,10 @@ router.post(
         recurrenceOfId: recurrence?.id ?? null,
         recurrenceDays: recurrence?.days ?? null,
         reporterId: req.user.id,
+        // Snapshotted, like the landmark name and the zone: whoever could see
+        // this on the day it was filed is who can see it forever, even if the
+        // reporter's role changes later.
+        reporterRole: req.user.role,
         status: 'SUBMITTED',
         media: { create: prepared },
       },
@@ -350,6 +354,70 @@ router.get(
 );
 
 /**
+ * Statuses a complaint reaches only after it has been let through.
+ *
+ * SUBMITTED and UNDER_REVIEW are deliberately absent: nothing appears in a
+ * community feed before an admin has confirmed it is genuine, or the feed
+ * becomes the place spam lands. REJECTED_INVALID never appears at all.
+ */
+const APPROVED_STATUSES = [
+  'ALLOTTED_TO_OFFICER',
+  'HELP_REQUESTED',
+  'ALLOTTED_TO_WORKER',
+  'IN_PROGRESS',
+  'WORK_DONE',
+  'REOPENED',
+  'ESCALATED',
+  'CLOSED',
+  'AUTO_CLOSED',
+];
+
+/** Roles that read a community feed rather than a work queue. */
+const REPORTER_ROLES = ['RESIDENT', 'STUDENT'];
+
+/**
+ * GET /api/complaints/community
+ *
+ * Every approved complaint filed by the caller's own community, theirs
+ * included. Residents see resident reports; students see student reports;
+ * neither ever sees the other's.
+ *
+ * The filter is on the complaint's snapshotted reporterRole, not on a join to
+ * the reporter's current role, so moving somebody between roles cannot
+ * retroactively expose what they filed to a different audience.
+ */
+router.get(
+  '/community',
+  authenticate,
+  asyncHandler(async (req, res) => {
+    if (!REPORTER_ROLES.includes(req.user.role)) {
+      throw new ApiError(
+        403,
+        'The community feed is for residents and students. Staff see complaints through their own queues.',
+      );
+    }
+
+    const complaints = await prisma.complaint.findMany({
+      where: {
+        reporterRole: req.user.role,
+        status: { in: APPROVED_STATUSES },
+      },
+      include: complaintInclude,
+      orderBy: { submittedAt: 'desc' },
+      take: 100,
+    });
+
+    res.json({
+      audience: req.user.role,
+      complaints: complaints.map((c) =>
+        // Peers get the report without the reporter's phone number.
+        serializeComplaint(c, { peer: c.reporterId !== req.user.id }),
+      ),
+    });
+  }),
+);
+
+/**
  * GET /api/complaints/awaiting-confirmation
  * Drives the satisfaction popup - anything the worker has finished that this
  * resident has not yet responded to.
@@ -393,17 +461,29 @@ router.get(
 
     if (!complaint) throw new ApiError(404, 'Complaint not found');
 
-    // Residents may only read their own; everyone else in the chain may read it.
     const { role, id: userId } = req.user;
+    const isOwn = complaint.reporterId === userId;
+
+    // Anyone whose community filed it may read it, once it has been approved -
+    // otherwise every card in the community feed would open onto a 403. The
+    // check mirrors that feed exactly: same audience, same statuses.
+    const isPeer =
+      REPORTER_ROLES.includes(role) &&
+      complaint.reporterRole === role &&
+      APPROVED_STATUSES.includes(complaint.status);
+
     const permitted =
       role === 'ADMIN' ||
       role === 'OFFICER' ||
-      complaint.reporterId === userId ||
+      isOwn ||
+      isPeer ||
       complaint.assignedWorkerId === userId;
     if (!permitted) throw new ApiError(403, 'You do not have access to this complaint');
 
     res.json({
-      complaint: serializeComplaint(complaint),
+      // A peer reading a neighbour's complaint gets the report, not their
+      // phone number.
+      complaint: serializeComplaint(complaint, { peer: !isOwn && isPeer }),
       timeline: complaint.statusLogs.map((l) => ({
         from: l.fromStatus,
         to: l.toStatus,
@@ -440,13 +520,9 @@ router.post(
   '/:id/satisfaction',
   authenticate,
   asyncHandler(async (req, res) => {
-    const schema = z.object({
-      satisfied: z.coerce.boolean(),
-      note: z.string().max(500).optional(),
-    });
-    const parsed = schema.safeParse(req.body);
-    if (!parsed.success) throw new ApiError(400, '`satisfied` must be true or false');
-
+    // Who you are is settled before what you sent. Validating the body first
+    // would answer a stranger's malformed request with advice on how to fix
+    // it, when the right answer is that this complaint is not theirs to close.
     const complaint = await prisma.complaint.findUnique({ where: { id: req.params.id } });
     if (!complaint) throw new ApiError(404, 'Complaint not found');
 
@@ -455,6 +531,26 @@ router.post(
     }
     if (complaint.status !== 'WORK_DONE') {
       throw new ApiError(409, 'This complaint is not waiting for your confirmation');
+    }
+
+    const schema = z.object({
+      satisfied: z.coerce.boolean(),
+      // Required either way. Signing off is the only moment anyone hears from
+      // the person the work was actually for, and "closed, no comment" tells
+      // the officer nothing about whether the fix will hold.
+      note: z
+        .string({ required_error: 'Say a few words about the work' })
+        .trim()
+        .min(3, 'Say a few words about the work')
+        .max(500),
+    });
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) {
+      throw new ApiError(
+        400,
+        parsed.error.flatten().fieldErrors.note?.[0] ??
+          '`satisfied` must be true or false',
+      );
     }
 
     const { satisfied, note } = parsed.data;
@@ -466,8 +562,8 @@ router.post(
         complaintId: complaint.id,
         toStatus: 'CLOSED',
         actor: req.user,
-        note: 'Resident confirmed the work is satisfactory',
-        data: { satisfaction: 'SATISFIED' },
+        note: `Reporter approved the work: ${note}`,
+        data: { satisfaction: 'SATISFIED', feedbackNote: note },
       });
 
       await notifyMany([
@@ -475,7 +571,7 @@ router.post(
           userId: complaint.assignedWorkerId,
           complaintId: complaint.id,
           title: 'Work approved',
-          body: `${complaint.ref} was approved by the resident. Nice work.`,
+          body: `${complaint.ref} was approved. "${note}"`,
         },
         {
           userId: complaint.assignedOfficerId,

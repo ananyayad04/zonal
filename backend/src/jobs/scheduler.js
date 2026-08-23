@@ -19,8 +19,21 @@ import { releaseWorker } from '../services/allocation.js';
 const adminIds = async () =>
   (await prisma.user.findMany({ where: { role: 'ADMIN' }, select: { id: true } })).map((a) => a.id);
 
-/** Residents who never responded to the satisfaction prompt. */
+/**
+ * Complaints the reporter never signed off.
+ *
+ * Disabled by default (AUTO_CLOSE_HOURS=0). Nothing closes a complaint except
+ * the person who filed it: the work is done when they say it is done, and a
+ * timer that decides on their behalf turns an unresolved problem into a
+ * resolved-looking statistic. Anything waiting stays in WORK_DONE, and stays
+ * visible to the officer, until they answer.
+ *
+ * The job is kept rather than deleted so a deployment that genuinely needs a
+ * backstop can set the variable and get one, deliberately.
+ */
 export async function autoCloseStaleWorkDone() {
+  if (!env.autoCloseHours || env.autoCloseHours <= 0) return 0;
+
   const cutoff = new Date(Date.now() - env.autoCloseHours * 60 * 60 * 1000);
 
   const stale = await prisma.complaint.findMany({
@@ -35,7 +48,7 @@ export async function autoCloseStaleWorkDone() {
       complaintId: c.id,
       toStatus: 'AUTO_CLOSED',
       isSystem: true,
-      note: `Resident did not respond within ${env.autoCloseHours}h`,
+      note: `Reporter did not respond within ${env.autoCloseHours}h`,
       // Recorded as AUTO, never as SATISFIED, so the approval rate stays honest.
       data: { satisfaction: 'AUTO' },
     });

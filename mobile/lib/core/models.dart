@@ -1,9 +1,14 @@
 // Data models mirroring the API payloads.
 
-enum Role { resident, worker, officer, admin, unknown }
+enum Role { resident, student, worker, officer, admin, unknown }
+
+/// Roles that file complaints and sign the work off. Identical in what they
+/// can do; separate in who sees what they file.
+const reporterRoles = {Role.resident, Role.student};
 
 Role roleFrom(String? v) => switch (v) {
       'RESIDENT' => Role.resident,
+      'STUDENT' => Role.student,
       'WORKER' => Role.worker,
       'OFFICER' => Role.officer,
       'ADMIN' => Role.admin,
@@ -276,7 +281,13 @@ class Complaint {
   final List<MediaItem> beforeMedia;
   final List<MediaItem> afterMedia;
 
+  /// Which community filed this — RESIDENT or STUDENT. Staff screens show it
+  /// so a student report can be told from a resident one at a glance.
+  final Role reporterRole;
+
   final String satisfaction;
+  /// What the reporter said when they signed the work off.
+  final String? feedbackNote;
   final String? unsatisfiedNote;
   final int reopenCount;
   final String? rejectionReason;
@@ -308,6 +319,8 @@ class Complaint {
     this.zoneDistanceM,
     this.isBoundaryCase = false,
     this.reporter,
+    this.reporterRole = Role.resident,
+    this.feedbackNote,
     this.officer,
     this.worker,
     required this.isCrossZone,
@@ -355,6 +368,8 @@ class Complaint {
       zoneResolvedBy: j['zoneResolvedBy'] as String?,
       zoneDistanceM: (j['zoneDistanceM'] as num?)?.toDouble(),
       isBoundaryCase: j['isBoundaryCase'] as bool? ?? false,
+      reporterRole: roleFrom(j['reporterRole'] as String?),
+      feedbackNote: j['feedbackNote'] as String?,
       reporter: j['reporter'] != null
           ? PersonRef.fromJson(j['reporter'] as Map<String, dynamic>)
           : null,

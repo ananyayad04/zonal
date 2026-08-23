@@ -14,8 +14,13 @@ datasource db {
 // ENUMS
 // ---------------------------------------------------------------------------
 
+/// STUDENT and RESIDENT are the same capability - both file complaints and
+/// sign the work off - but they are separate audiences. A complaint is only
+/// ever shown to peers of the role that filed it, so the two communities never
+/// read each other's reports.
 enum Role {
   RESIDENT
+  STUDENT
   WORKER
   OFFICER
   ADMIN
@@ -322,8 +327,16 @@ model Complaint {
   recurrenceDays Int?
 
   // --- the people involved ----------------------------------------------
-  reporterId String
-  reporter   User   @relation("Reporter", fields: [reporterId], references: [id])
+  reporterId   String
+  reporter     User   @relation("Reporter", fields: [reporterId], references: [id])
+  /// Which community this complaint belongs to, snapshotted at submit time.
+  ///
+  /// Read from the reporter's role rather than joined live, for the same
+  /// reason the zone and landmark name are frozen: if someone's role is
+  /// changed later, the complaint must not silently move to a different
+  /// audience. Who could see it on the day it was filed is who can see it
+  /// forever.
+  reporterRole Role   @default(RESIDENT)
 
   approvedByAdminId String?
   approvedByAdmin   User?   @relation("ApprovedByAdmin", fields: [approvedByAdminId], references: [id])
@@ -355,8 +368,15 @@ model Complaint {
   escalatedAt      DateTime?
   escalationReason String?
 
-  // --- the resident's final say -----------------------------------------
+  // --- the reporter's final say -----------------------------------------
+  //
+  // Nothing closes without it. There is no timeout that decides on their
+  // behalf: a complaint sits in WORK_DONE until the person who filed it says
+  // the work is good.
   satisfaction    SatisfactionState @default(PENDING)
+  /// What they said when signing the work off. Required on approval - a bare
+  /// tick tells the officer nothing about whether the fix will hold.
+  feedbackNote    String?
   unsatisfiedNote String?
   reopenCount     Int               @default(0)
 
@@ -369,6 +389,8 @@ model Complaint {
   updatedAt DateTime @updatedAt
 
   @@index([status])
+  // The community feed reads by audience and status, newest first.
+  @@index([reporterRole, status, submittedAt])
   @@index([zoneId, status])
   @@index([assignedOfficerId, status])
   @@index([assignedWorkerId, status])

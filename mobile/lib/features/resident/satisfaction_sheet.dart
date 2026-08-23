@@ -54,8 +54,13 @@ class _SatisfactionSheetState extends State<SatisfactionSheet> {
   }
 
   Future<void> _submit() async {
-    if (!widget.satisfied && _note.text.trim().length < 3) {
-      setState(() => _error = 'Tell the worker what is still wrong');
+    // Required either way. Signing off is the only moment anyone hears from
+    // the person the work was actually for, and a bare tick tells the officer
+    // nothing about whether the fix will hold.
+    if (_note.text.trim().length < 3) {
+      setState(() => _error = widget.satisfied
+          ? 'Say a few words about the work'
+          : 'Tell the worker what is still wrong');
       return;
     }
 
@@ -69,7 +74,7 @@ class _SatisfactionSheetState extends State<SatisfactionSheet> {
         '/complaints/${widget.complaint.id}/satisfaction',
         {
           'satisfied': widget.satisfied,
-          if (_note.text.trim().isNotEmpty) 'note': _note.text.trim(),
+          'note': _note.text.trim(),
         },
       );
 
@@ -141,8 +146,11 @@ class _SatisfactionSheetState extends State<SatisfactionSheet> {
             textCapitalization: TextCapitalization.sentences,
             decoration: InputDecoration(
               labelText: widget.satisfied
-                  ? 'Add a note (optional)'
+                  ? 'How was the work?'
                   : 'What is still wrong?',
+              hintText: widget.satisfied
+                  ? 'Cleaned properly, no complaints now'
+                  : null,
               alignLabelWithHint: true,
             ),
           ),

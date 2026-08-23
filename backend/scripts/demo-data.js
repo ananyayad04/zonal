@@ -231,8 +231,8 @@ async function main() {
 
   // --- 5. Ordinary traffic elsewhere --------------------------------------
   const ordinary = [
-    ['Raman Hostel', 2], ['Ambedkar Hostel', 2], ['Subhash Hostel', 2],
-    ['Tagore Hostel', 2], ['Saraswati Hostel', 4], ['New Girls Hostel', 4],
+    ['Raman Bhawan', 2], ['Ambedkar Bhawan', 2], ['Subhash Bhawan', 2],
+    ['Tagore Bhawan', 2], ['Saraswati Hostel', 4], ['Kasturba Bhawan', 4],
     ['Civil Department', 3], ['Mechanical Department', 3],
     ['B.Pharma Department', 7], ['Management Department', 7],
     ['Main Gate', 1], ['ATM', 1], ['Fountain', 1], ['Atal Bhawan', 7],
@@ -255,7 +255,7 @@ async function main() {
   // --- 6. Recurrences -----------------------------------------------------
   // Signed off, then reported again days later at the same place.
   const recurrencePairs = [
-    ['Raman Hostel', 'OVERFLOWING_BIN', 2, 12, 3],
+    ['Raman Bhawan', 'OVERFLOWING_BIN', 2, 12, 3],
     ['Saraswati Hostel', 'WASHROOM', 4, 16, 4],
     ['Main Gate', 'GARBAGE', 1, 9, 2],
   ];

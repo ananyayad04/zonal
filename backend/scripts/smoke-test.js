@@ -263,7 +263,7 @@ async function main() {
   );
   check(
     'hostels are included',
-    (lmRes.body.landmarks ?? []).some((l) => l.name === 'Raman Hostel'),
+    (lmRes.body.landmarks ?? []).some((l) => l.name === 'Raman Bhawan'),
   );
   check(
     'departments are included',
@@ -271,7 +271,7 @@ async function main() {
   );
 
   const LM = (lmRes.body.landmarks ?? []).find((l) => l.name === 'CSE Department')?.id;
-  const LM_HOSTEL = (lmRes.body.landmarks ?? []).find((l) => l.name === 'Raman Hostel')?.id;
+  const LM_HOSTEL = (lmRes.body.landmarks ?? []).find((l) => l.name === 'Raman Bhawan')?.id;
 
   // --- filing a complaint ------------------------------------------------
   console.log('\nFiling a complaint');

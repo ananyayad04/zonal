@@ -10,6 +10,7 @@ import '../../shared/ui.dart';
 import '../shared/app_drawer.dart';
 import '../shared/complaint_detail_screen.dart';
 import 'new_complaint_screen.dart';
+import 'community_screen.dart';
 import 'satisfaction_sheet.dart';
 
 class ResidentHome extends StatefulWidget {
@@ -60,12 +61,23 @@ class _ResidentHomeState extends State<ResidentHome> {
 
   @override
   Widget build(BuildContext context) {
-    final name = context.watch<Session>().user?.name.split(' ').first ?? 'there';
+    final session = context.watch<Session>();
+    final name = session.user?.name.split(' ').first ?? 'there';
+    final isStudent = session.role == Role.student;
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Smart Clean Campus'),
-        actions: const [NotificationBell()],
+        actions: [
+          IconButton(
+            tooltip: isStudent ? 'Student reports' : 'Resident reports',
+            icon: const Icon(Icons.groups_outlined),
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const CommunityScreen()),
+            ),
+          ),
+          const NotificationBell(),
+        ],
       ),
       drawer: const AppDrawer(),
       floatingActionButton: FloatingActionButton.extended(

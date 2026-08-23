@@ -133,47 +133,38 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       ),
                     ),
                     const SizedBox(height: 10),
-                    SegmentedButton<Role>(
-                      segments: const [
-                        ButtonSegment(
-                          value: Role.resident,
-                          label: Text('Resident'),
-                          icon: Icon(Icons.person_outline),
-                        ),
-                        ButtonSegment(
-                          value: Role.worker,
-                          label: Text('Worker'),
-                          icon: Icon(Icons.cleaning_services_outlined),
-                        ),
-                        ButtonSegment(
-                          value: Role.officer,
-                          label: Text('Officer'),
-                          icon: Icon(Icons.shield_outlined),
-                        ),
+                    // A 2x2 grid rather than a segmented control: four roles
+                    // will not fit across a phone, and each one needs a line of
+                    // explanation anyway - "Resident" and "Student" are not
+                    // self-explanatory when both can file complaints.
+                    GridView.count(
+                      crossAxisCount: 2,
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      mainAxisSpacing: 10,
+                      crossAxisSpacing: 10,
+                      childAspectRatio: 2.5,
+                      children: [
+                        for (final option in _roleOptions)
+                          _RoleCard(
+                            option: option,
+                            selected: _role == option.role,
+                            onTap: () {
+                              setState(() {
+                                _role = option.role;
+                                // A zone chosen as a worker means something
+                                // different as an officer, so never carry the
+                                // choice across.
+                                _zoneCode = null;
+                              });
+                              if (_needsZone) _loadZones();
+                            },
+                          ),
                       ],
-                      selected: {_role},
-                      onSelectionChanged: (s) {
-                        setState(() {
-                          _role = s.first;
-                          // A zone chosen as a worker means something different
-                          // as an officer, so never carry the choice across.
-                          _zoneCode = null;
-                        });
-                        if (_needsZone) _loadZones();
-                      },
                     ),
-                    const SizedBox(height: 8),
+                    const SizedBox(height: 10),
                     Text(
-                      switch (_role) {
-                        Role.resident =>
-                          'Students, faculty and staff who report unclean areas.',
-                        Role.officer =>
-                          'You run one zone: complaints from it come to you, and '
-                              'you allot them to your workers. An admin approves '
-                              'you before the zone is yours.',
-                        _ => 'Cleaning staff. An admin verifies your account before '
-                            'you can be given any work.',
-                      },
+                      _roleOptions.firstWhere((o) => o.role == _role).blurb,
                       style: const TextStyle(
                           fontSize: 12.5, color: Palette.inkSecondary, height: 1.35),
                     ),
@@ -330,6 +321,103 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 ),
               ),
             ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// One choice on the signup screen.
+class _RoleOption {
+  const _RoleOption(this.role, this.label, this.icon, this.blurb);
+
+  final Role role;
+  final String label;
+  final IconData icon;
+  final String blurb;
+}
+
+const _roleOptions = <_RoleOption>[
+  _RoleOption(
+    Role.resident,
+    'Resident',
+    Icons.home_outlined,
+    'Faculty, staff and families living on campus. Your complaints are '
+        'visible to other residents.',
+  ),
+  _RoleOption(
+    Role.student,
+    'Student',
+    Icons.school_outlined,
+    'Students living in the hostels or attending classes. Your complaints '
+        'are visible to other students.',
+  ),
+  _RoleOption(
+    Role.worker,
+    'Worker',
+    Icons.cleaning_services_outlined,
+    'Cleaning staff. An admin verifies your account before you can be given '
+        'any work.',
+  ),
+  _RoleOption(
+    Role.officer,
+    'Officer',
+    Icons.shield_outlined,
+    'You run one zone: complaints from it come to you, and you allot them to '
+        'your workers. An admin approves you before the zone is yours.',
+  ),
+];
+
+class _RoleCard extends StatelessWidget {
+  const _RoleCard({
+    required this.option,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final _RoleOption option;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = Theme.of(context).colorScheme.primary;
+
+    return Material(
+      color: selected ? accent.withValues(alpha: 0.10) : Colors.transparent,
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: selected ? accent : Palette.grid,
+              width: selected ? 1.8 : 1,
+            ),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                option.icon,
+                size: 20,
+                color: selected ? accent : Palette.inkSecondary,
+              ),
+              const SizedBox(width: 9),
+              Expanded(
+                child: Text(
+                  option.label,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+                    color: selected ? accent : Palette.inkPrimary,
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ),

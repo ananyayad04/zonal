@@ -228,7 +228,15 @@ class _ReviewCard extends StatelessWidget {
             ],
             const SizedBox(height: 6),
             Text(
-              'Reported by ${complaint.reporter?.name ?? 'someone'}',
+              // Which community reported it is part of judging the report:
+              // the same spot means something different when it comes from a
+              // hostel resident than from staff quarters.
+              'Reported by ${complaint.reporter?.name ?? 'someone'}'
+              '${switch (complaint.reporterRole) {
+                Role.student => ' · Student',
+                Role.resident => ' · Resident',
+                _ => '',
+              }}',
               style: const TextStyle(fontSize: 12.5, color: Palette.inkMuted),
             ),
 

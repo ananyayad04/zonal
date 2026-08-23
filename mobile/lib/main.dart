@@ -70,7 +70,10 @@ class _RoleRouter extends StatelessWidget {
     if (!session.isLoggedIn) return const LoginScreen();
 
     return switch (session.role) {
-      Role.resident => const ResidentHome(),
+      // Students and residents get the same screens. They differ only in
+      // which community feed their complaints appear in, which the server
+      // decides from the account.
+      Role.resident || Role.student => const ResidentHome(),
       Role.worker => const WorkerHome(),
       // An officer who has not been appointed yet owns no zone, and the
       // dashboard assumes one throughout. Send them to the waiting screen
