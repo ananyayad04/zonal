@@ -249,7 +249,11 @@ router.post(
 router.post(
   '/complaints/:id/allot',
   asyncHandler(async (req, res) => {
-    const schema = z.object({ workerUserId: z.string().min(1) });
+    const schema = z.object({
+      workerUserId: z.string().min(1),
+      instructions: z.string().trim().max(500).optional(),
+      durationHours: z.number().positive().max(2160).optional(),
+    });
     const parsed = schema.safeParse(req.body);
     if (!parsed.success) throw new ApiError(400, 'workerUserId is required');
 
@@ -298,6 +302,8 @@ router.post(
       complaint: { ...complaint, zoneName: complaint.zone.name },
       workerUserId: parsed.data.workerUserId,
       actor: req.user,
+      instructions: parsed.data.instructions,
+      durationHours: parsed.data.durationHours,
     });
 
     res.json({ complaint: serializeComplaint(updated), message: 'Worker allotted.' });

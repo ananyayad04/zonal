@@ -300,6 +300,10 @@ class Complaint {
   final bool isOverdue;
   final int? resolutionMinutes;
 
+  /// Free text from whoever allotted this - how much area to cover, in
+  /// whatever language suits the worker.
+  final String? workInstructions;
+
   const Complaint({
     required this.id,
     required this.ref,
@@ -338,6 +342,7 @@ class Complaint {
     this.slaDueAt,
     required this.isOverdue,
     this.resolutionMinutes,
+    this.workInstructions,
   });
 
   static DateTime? _date(dynamic v) => v == null ? null : DateTime.tryParse(v as String)?.toLocal();
@@ -393,6 +398,7 @@ class Complaint {
       slaDueAt: _date(j['slaDueAt']),
       isOverdue: j['isOverdue'] as bool? ?? false,
       resolutionMinutes: j['resolutionMinutes'] as int?,
+      workInstructions: j['workInstructions'] as String?,
     );
   }
 }

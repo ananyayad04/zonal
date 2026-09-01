@@ -160,6 +160,7 @@ export function serializeComplaint(c, opts = {}) {
     },
     slaDueAt: c.slaDueAt,
     isOverdue: c.slaDueAt ? new Date(c.slaDueAt) < new Date() : false,
+    workInstructions: c.workInstructions ?? null,
 
     // Minutes from submit to close - the headline analytics number.
     resolutionMinutes:

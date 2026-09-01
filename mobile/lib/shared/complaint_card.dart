@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../core/models.dart';
@@ -271,6 +273,37 @@ class ComplaintCard extends StatelessWidget {
                           ],
                         ),
                       ],
+                      // What to cover and how long is left - set by whoever
+                      // allotted this, shown to whoever is looking at it.
+                      if (complaint.workInstructions?.isNotEmpty ?? false) ...[
+                        const SizedBox(height: 7),
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Icon(Icons.notes, size: 14, color: AppTheme.seed),
+                            const SizedBox(width: 5),
+                            Expanded(
+                              child: Text(
+                                complaint.workInstructions!,
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  height: 1.3,
+                                  fontWeight: FontWeight.w600,
+                                  color: AppTheme.seed,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                      if (complaint.slaDueAt != null &&
+                          !_terminalStatuses.contains(complaint.status)) ...[
+                        const SizedBox(height: 7),
+                        _CountdownRow(
+                          dueAt: complaint.slaDueAt!,
+                          overdue: complaint.isOverdue,
+                        ),
+                      ],
                       if (action != null) ...[
                         const SizedBox(height: 11),
                         action!,
@@ -289,6 +322,55 @@ class ComplaintCard extends StatelessWidget {
 
 extension _FirstOrNull<E> on Iterable<E> {
   E? get firstOrNull => isEmpty ? null : first;
+}
+
+const _terminalStatuses = {'CLOSED', 'AUTO_CLOSED', 'REJECTED_INVALID'};
+
+/// A ticking "Xd Yh left" / "Overdue by Xh" row. Recomputes once a minute -
+/// day/hour-scale deadlines never need finer than that.
+class _CountdownRow extends StatefulWidget {
+  final DateTime dueAt;
+  final bool overdue;
+
+  const _CountdownRow({required this.dueAt, required this.overdue});
+
+  @override
+  State<_CountdownRow> createState() => _CountdownRowState();
+}
+
+class _CountdownRowState extends State<_CountdownRow> {
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(minutes: 1), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final text = formatCountdown(widget.dueAt);
+    if (text == null) return const SizedBox.shrink();
+    final color = widget.overdue ? Palette.critical : Palette.inkMuted;
+    return Row(
+      children: [
+        Icon(Icons.timer_outlined, size: 14, color: color),
+        const SizedBox(width: 5),
+        Text(
+          text,
+          style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: color),
+        ),
+      ],
+    );
+  }
 }
 
 /// Says whether a complaint came from the resident community or the student

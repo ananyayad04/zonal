@@ -220,6 +220,23 @@ String formatDuration(int? minutes) {
   return m == 0 ? '${h}h' : '${h}h ${m}m';
 }
 
+/// A live-style countdown to a deadline, scaling to days for the multi-day
+/// task durations an officer or admin can now set. `formatDuration` stays
+/// minutes-only for analytics averages, which never run to days.
+String? formatCountdown(DateTime? dueAt) {
+  if (dueAt == null) return null;
+  final diff = dueAt.difference(DateTime.now());
+  if (diff.isNegative) {
+    final overdue = diff.abs();
+    if (overdue.inDays > 0) return 'Overdue by ${overdue.inDays}d';
+    if (overdue.inHours > 0) return 'Overdue by ${overdue.inHours}h';
+    return 'Overdue by ${overdue.inMinutes}m';
+  }
+  if (diff.inDays > 0) return '${diff.inDays}d ${diff.inHours % 24}h left';
+  if (diff.inHours > 0) return '${diff.inHours}h ${diff.inMinutes % 60}m left';
+  return '${diff.inMinutes}m left';
+}
+
 /// One-line error/success feedback.
 void showSnack(BuildContext context, String message, {bool error = false}) {
   if (!context.mounted) return;

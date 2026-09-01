@@ -49,6 +49,23 @@ router.get(
     const zones = await prisma.zone.findMany({ orderBy: { code: 'asc' } });
     const zoneById = Object.fromEntries(zones.map((z) => [z.id, z]));
 
+    const workerCounts = await prisma.workerProfile.groupBy({
+      by: ['zoneId'],
+      where: { approvalStatus: 'ACTIVE' },
+      _count: { _all: true },
+    });
+    const workerCountByZone = Object.fromEntries(
+      workerCounts.map((w) => [w.zoneId, w._count._all]),
+    );
+    const freeWorkerCounts = await prisma.workerProfile.groupBy({
+      by: ['zoneId'],
+      where: { approvalStatus: 'ACTIVE', dutyStatus: 'ON', availability: 'AVAILABLE' },
+      _count: { _all: true },
+    });
+    const freeWorkerCountByZone = Object.fromEntries(
+      freeWorkerCounts.map((w) => [w.zoneId, w._count._all]),
+    );
+
     const total = complaints.length;
     const closed = complaints.filter((c) => CLOSED_STATES.includes(c.status));
     const open = complaints.filter((c) => !DEAD_STATES.includes(c.status));
@@ -89,6 +106,8 @@ router.get(
         resolutionRate: inZone.length
           ? Math.round((closedInZone.length / inZone.length) * 100)
           : null,
+        workerCount: workerCountByZone[z.id] ?? 0,
+        freeWorkerCount: freeWorkerCountByZone[z.id] ?? 0,
       };
     });
 

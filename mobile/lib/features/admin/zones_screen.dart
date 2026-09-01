@@ -9,8 +9,7 @@ import 'zone_editor_screen.dart';
 import 'zone_setup_screen.dart';
 
 /// The admin's zone list. Every zone's boundary, officer and roster in one
-/// place, plus the coverage check that says whether the campus is fully
-/// carved up.
+/// place.
 class ZonesScreen extends StatefulWidget {
   const ZonesScreen({super.key});
 
@@ -29,14 +28,8 @@ class _ZonesScreenState extends State<ZonesScreen> {
 
   Future<_ZonesData> _load() async {
     final api = context.read<ApiClient>();
-    final results = await Future.wait([
-      api.get('/admin/zones'),
-      api.get('/admin/zones/coverage', query: {'steps': 30}),
-    ]);
-    return _ZonesData(
-      zones: (results[0]['zones'] as List).cast<Map<String, dynamic>>(),
-      coverage: results[1],
-    );
+    final res = await api.get('/admin/zones');
+    return _ZonesData(zones: (res['zones'] as List).cast<Map<String, dynamic>>());
   }
 
   Future<void> _refresh() async {
@@ -65,8 +58,6 @@ class _ZonesScreenState extends State<ZonesScreen> {
             child: ListView(
               padding: const EdgeInsets.only(bottom: 28),
               children: [
-                _CoverageCard(coverage: data.coverage),
-
                 // The recommended path. Marking one point per zone gives a
                 // partition with no gaps and no overlaps, in eight taps.
                 Padding(
@@ -158,89 +149,8 @@ class _ZonesScreenState extends State<ZonesScreen> {
 
 class _ZonesData {
   final List<Map<String, dynamic>> zones;
-  final Map<String, dynamic> coverage;
 
-  const _ZonesData({required this.zones, required this.coverage});
-}
-
-/// Turns an invisible data problem - a strip of campus nobody owns - into a
-/// number the admin can act on.
-class _CoverageCard extends StatelessWidget {
-  final Map<String, dynamic> coverage;
-
-  const _CoverageCard({required this.coverage});
-
-  @override
-  Widget build(BuildContext context) {
-    final pct = coverage['coveragePct'] as int? ?? 0;
-    final overlaps = (coverage['overlapPairs'] as List?) ?? const [];
-    final undrawn = (coverage['undrawn'] as List?) ?? const [];
-    final clean = pct == 100 && overlaps.isEmpty && undrawn.isEmpty;
-
-    final color = clean
-        ? Palette.good
-        : pct >= 90
-            ? Palette.warning
-            : Palette.serious;
-
-    return Container(
-      margin: const EdgeInsets.fromLTRB(12, 14, 12, 0),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.09),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: color.withValues(alpha: 0.4)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(clean ? Icons.verified : Icons.warning_amber, color: color, size: 22),
-              const SizedBox(width: 10),
-              Text(
-                '$pct% of campus covered',
-                style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          // A recessive track with a single filled bar - magnitude, one hue.
-          ClipRRect(
-            borderRadius: BorderRadius.circular(4),
-            child: LinearProgressIndicator(
-              value: pct / 100,
-              minHeight: 8,
-              backgroundColor: Palette.grid,
-              valueColor: AlwaysStoppedAnimation(color),
-            ),
-          ),
-          const SizedBox(height: 10),
-          Text(
-            coverage['summary'] as String? ?? '',
-            style: const TextStyle(fontSize: 12.5, height: 1.4, color: Palette.inkSecondary),
-          ),
-          if (undrawn.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            Text(
-              'Not drawn yet: ${undrawn.map((z) => z['name']).join(', ')}',
-              style: const TextStyle(
-                  fontSize: 12, fontWeight: FontWeight.w600, color: Palette.serious),
-            ),
-          ],
-          if (overlaps.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            for (final o in overlaps)
-              Text(
-                'Overlap: ${(o['names'] as List).join(' and ')}',
-                style: const TextStyle(
-                    fontSize: 12, fontWeight: FontWeight.w600, color: Palette.warning),
-              ),
-          ],
-        ],
-      ),
-    );
-  }
+  const _ZonesData({required this.zones});
 }
 
 class _ZoneRow extends StatelessWidget {
@@ -255,6 +165,7 @@ class _ZoneRow extends StatelessWidget {
     final officer = zone['officer'] as Map<String, dynamic>?;
     final hasBoundary = zone['hasBoundary'] == true;
     final areaM2 = zone['areaM2'] as int? ?? 0;
+    final extent = hasBoundary ? _extentOf(zone['polygon'] as List?) : null;
 
     return Card(
       clipBehavior: Clip.antiAlias,
@@ -301,12 +212,6 @@ class _ZoneRow extends StatelessWidget {
                           const Icon(Icons.chevron_right, color: Palette.inkMuted),
                         ],
                       ),
-                      const SizedBox(height: 2),
-                      Text(
-                        zone['label'] as String? ?? '',
-                        style: const TextStyle(
-                            fontSize: 13, color: Palette.inkSecondary),
-                      ),
                       const SizedBox(height: 10),
                       Wrap(
                         spacing: 14,
@@ -332,6 +237,11 @@ class _ZoneRow extends StatelessWidget {
                                   ? '${(areaM2 / 10000).toStringAsFixed(1)} ha'
                                   : '$areaM2 m²',
                             ),
+                          if (extent != null)
+                            _Fact(
+                              icon: Icons.explore_outlined,
+                              text: extent,
+                            ),
                         ],
                       ),
                     ],
@@ -344,6 +254,25 @@ class _ZoneRow extends StatelessWidget {
       ),
     );
   }
+}
+
+/// The lat/lng bounding box a drawn boundary actually covers, so the admin
+/// can see where a zone sits on the map without opening the editor - useful
+/// since zones are drawn freehand rather than assigned from a fixed list.
+String? _extentOf(List? polygon) {
+  if (polygon == null || polygon.length < 3) return null;
+  var minLat = double.infinity, maxLat = -double.infinity;
+  var minLng = double.infinity, maxLng = -double.infinity;
+  for (final p in polygon) {
+    final lat = (p[0] as num).toDouble();
+    final lng = (p[1] as num).toDouble();
+    if (lat < minLat) minLat = lat;
+    if (lat > maxLat) maxLat = lat;
+    if (lng < minLng) minLng = lng;
+    if (lng > maxLng) maxLng = lng;
+  }
+  return '${minLat.toStringAsFixed(4)}–${maxLat.toStringAsFixed(4)}°N, '
+      '${minLng.toStringAsFixed(4)}–${maxLng.toStringAsFixed(4)}°E';
 }
 
 class _Fact extends StatelessWidget {

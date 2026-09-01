@@ -5,6 +5,7 @@ import '../../core/api_client.dart';
 import '../../core/models.dart';
 import '../../core/palette.dart';
 import '../../core/theme.dart';
+import '../../shared/allotment_details_sheet.dart';
 import '../../shared/ui.dart';
 
 /// Allotment.
@@ -50,6 +51,9 @@ class _AllotSheetState extends State<AllotSheet> {
       .get('/officer/complaints/${widget.complaint.id}/candidates');
 
   Future<void> _allot(String workerUserId) async {
+    final details = await AllotmentDetailsSheet.show(context);
+    if (details == null || !mounted) return;
+
     setState(() {
       _busy = true;
       _error = null;
@@ -58,7 +62,11 @@ class _AllotSheetState extends State<AllotSheet> {
     try {
       final res = await context.read<ApiClient>().post(
         '/officer/complaints/${widget.complaint.id}/allot',
-        {'workerUserId': workerUserId},
+        {
+          'workerUserId': workerUserId,
+          if (details.instructions != null) 'instructions': details.instructions,
+          if (details.durationHours != null) 'durationHours': details.durationHours,
+        },
       );
       if (mounted) {
         Navigator.of(context).pop(true);

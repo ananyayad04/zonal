@@ -4,7 +4,9 @@ import 'package:provider/provider.dart';
 import '../../core/api_client.dart';
 import '../../core/models.dart';
 import '../../core/palette.dart';
+import '../../shared/allotment_details_sheet.dart';
 import '../../shared/complaint_card.dart';
+import '../../shared/pick_any_worker_sheet.dart';
 import '../../shared/ui.dart';
 import '../shared/complaint_detail_screen.dart';
 
@@ -41,14 +43,7 @@ class _EscalationsScreenState extends State<EscalationsScreen> {
   Future<void> _allotAnyone(Complaint c) async {
     try {
       final res = await context.read<ApiClient>().get('/admin/free-workers');
-      final zones = (res['zones'] as List).cast<Map<String, dynamic>>();
-
-      final options = <Map<String, dynamic>>[];
-      for (final z in zones) {
-        for (final w in (z['workers'] as List).cast<Map<String, dynamic>>()) {
-          options.add({...w, 'zoneName': (z['zone'] as Map)['name']});
-        }
-      }
+      final options = flattenFreeWorkers((res['zones'] as List).cast<Map<String, dynamic>>());
 
       if (!mounted) return;
 
@@ -57,20 +52,20 @@ class _EscalationsScreenState extends State<EscalationsScreen> {
         return;
       }
 
-      final chosen = await showModalBottomSheet<String>(
-        context: context,
-        backgroundColor: Colors.white,
-        shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-        ),
-        builder: (_) => _PickAnyWorkerSheet(options: options),
-      );
+      final chosen = await PickAnyWorkerSheet.show(context, options);
 
       if (chosen == null || !mounted) return;
 
+      final details = await AllotmentDetailsSheet.show(context);
+      if (details == null || !mounted) return;
+
       final result = await context.read<ApiClient>().post(
         '/admin/complaints/${c.id}/force-allot',
-        {'workerUserId': chosen},
+        {
+          'workerUserId': chosen,
+          if (details.instructions != null) 'instructions': details.instructions,
+          if (details.durationHours != null) 'durationHours': details.durationHours,
+        },
       );
 
       if (mounted) {
@@ -178,79 +173,4 @@ class _EscalationsScreenState extends State<EscalationsScreen> {
         'REJECTED_TWICE' => 'The resident sent the work back more than once.',
         _ => 'Escalated to the admin.',
       };
-}
-
-class _PickAnyWorkerSheet extends StatelessWidget {
-  final List<Map<String, dynamic>> options;
-
-  const _PickAnyWorkerSheet({required this.options});
-
-  @override
-  Widget build(BuildContext context) {
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 14, 20, 20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Center(
-              child: Container(
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: Palette.grid,
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-            ),
-            const SizedBox(height: 20),
-            const Text(
-              'Free workers, campus-wide',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
-            ),
-            const SizedBox(height: 4),
-            const Text(
-              'Zone rules do not apply here — you can send anyone.',
-              style: TextStyle(fontSize: 13, color: Palette.inkSecondary),
-            ),
-            const SizedBox(height: 14),
-            Flexible(
-              child: ListView.builder(
-                shrinkWrap: true,
-                itemCount: options.length,
-                itemBuilder: (_, i) {
-                  final w = options[i];
-                  return ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    leading: CircleAvatar(
-                      backgroundColor: Palette.grid,
-                      child: Text(
-                        (w['name'] as String).isEmpty
-                            ? '?'
-                            : (w['name'] as String)[0].toUpperCase(),
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w800,
-                          color: Palette.inkSecondary,
-                        ),
-                      ),
-                    ),
-                    title: Text(
-                      w['name'] as String,
-                      style: const TextStyle(fontWeight: FontWeight.w700),
-                    ),
-                    subtitle: Text(
-                      '${w['zoneName']} · ${w['tasksCompletedToday'] ?? 0} done today',
-                    ),
-                    trailing: const Icon(Icons.arrow_forward_ios, size: 15),
-                    onTap: () => Navigator.of(context).pop(w['userId'] as String),
-                  );
-                },
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 }

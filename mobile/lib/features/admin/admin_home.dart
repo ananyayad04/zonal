@@ -11,6 +11,8 @@ import 'analytics_screen.dart';
 import 'campus_map_screen.dart';
 import 'escalations_screen.dart';
 import 'insights_screen.dart';
+import 'multi_zone_workers_screen.dart';
+import 'unallotted_complaints_screen.dart';
 import 'verify_complaints_screen.dart';
 import 'verify_people_screen.dart';
 import 'zones_screen.dart';
@@ -202,6 +204,18 @@ class _AdminHomeState extends State<AdminHome> {
                           title: 'Set up zones',
                           subtitle: 'Draw boundaries, assign officers, check coverage',
                           onTap: () => _go(const ZonesScreen()),
+                        ),
+                        _NavTile(
+                          icon: Icons.assignment_late_outlined,
+                          title: 'Unallotted complaints',
+                          subtitle: 'Allot straight to a worker, without the officer',
+                          onTap: () => _go(const UnallottedComplaintsScreen()),
+                        ),
+                        _NavTile(
+                          icon: Icons.swap_horiz,
+                          title: 'Multi-zone workers',
+                          subtitle: 'Who is currently lent to another zone',
+                          onTap: () => _go(const MultiZoneWorkersScreen()),
                         ),
                         _NavTile(
                           icon: Icons.map_outlined,

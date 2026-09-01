@@ -30,6 +30,10 @@ class _VerifyPeopleScreenState extends State<VerifyPeopleScreen>
   late Future<List<Map<String, dynamic>>> _future;
   int _index = 0;
 
+  /// Zone code to filter by, or null for "all zones". Purely client-side -
+  /// the zone is already on every record this screen fetches.
+  int? _zoneFilter;
+
   @override
   void initState() {
     super.initState();
@@ -127,42 +131,101 @@ class _VerifyPeopleScreenState extends State<VerifyPeopleScreen>
           onRetry: _refresh,
           builder: (all) {
             // Drop anyone decided in this session so the card clears at once.
-            final workers = all
+            final undecided = all
                 .where((w) => !_decided.contains(w['userId'] as String))
                 .toList();
 
+            // Zone counts come from the undecided set, so a chip's number
+            // matches what tapping it will actually show.
+            final zoneCounts = <int, int>{};
+            for (final w in undecided) {
+              final code = (w['zone'] as Map<String, dynamic>?)?['code'] as int?;
+              if (code != null) zoneCounts[code] = (zoneCounts[code] ?? 0) + 1;
+            }
+            final zoneCodes = zoneCounts.keys.toList()..sort();
+
+            final workers = _zoneFilter == null
+                ? undecided
+                : undecided
+                    .where((w) =>
+                        (w['zone'] as Map<String, dynamic>?)?['code'] == _zoneFilter)
+                    .toList();
+
+            final chips = zoneCodes.isEmpty
+                ? null
+                : Padding(
+                    padding: const EdgeInsets.fromLTRB(14, 10, 14, 2),
+                    child: Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        ChoiceChip(
+                          label: Text('All (${undecided.length})'),
+                          selected: _zoneFilter == null,
+                          onSelected: (_) => setState(() => _zoneFilter = null),
+                        ),
+                        for (final code in zoneCodes)
+                          ChoiceChip(
+                            label: Text('Zone $code (${zoneCounts[code]})'),
+                            selected: _zoneFilter == code,
+                            onSelected: (_) =>
+                                setState(() => _zoneFilter = code),
+                          ),
+                      ],
+                    ),
+                  );
+
             if (workers.isEmpty) {
-              return EmptyState(
-                icon: switch (_index) {
-                  0 => Icons.done_all,
-                  1 => Icons.groups_outlined,
-                  _ => Icons.person_off_outlined,
-                },
-                title: switch (_index) {
-                  0 => 'Nobody waiting',
-                  1 => widget.officers ? 'No appointed officers' : 'No active workers',
-                  _ => 'Nobody rejected',
-                },
-                subtitle: _index == 0
-                    ? (widget.officers
-                        ? 'Officer applications appear here for you to check.'
-                        : 'New worker registrations appear here for you to check.')
-                    : null,
+              return Column(
+                children: [
+                  if (chips != null) chips,
+                  Expanded(
+                    child: EmptyState(
+                      icon: _zoneFilter != null
+                          ? Icons.filter_alt_off_outlined
+                          : switch (_index) {
+                              0 => Icons.done_all,
+                              1 => Icons.groups_outlined,
+                              _ => Icons.person_off_outlined,
+                            },
+                      title: _zoneFilter != null
+                          ? 'Nobody in Zone $_zoneFilter'
+                          : switch (_index) {
+                              0 => 'Nobody waiting',
+                              1 => widget.officers
+                                  ? 'No appointed officers'
+                                  : 'No active workers',
+                              _ => 'Nobody rejected',
+                            },
+                      subtitle: _zoneFilter == null && _index == 0
+                          ? (widget.officers
+                              ? 'Officer applications appear here for you to check.'
+                              : 'New worker registrations appear here for you to check.')
+                          : null,
+                    ),
+                  ),
+                ],
               );
             }
 
             return RefreshIndicator(
               onRefresh: _refresh,
               child: ListView.builder(
-                padding: const EdgeInsets.symmetric(vertical: 8),
-                itemCount: workers.length,
-                itemBuilder: (_, i) => _PersonCard(
-                  worker: workers[i],
-                  officer: widget.officers,
-                  showActions: _index == 0,
-                  onApprove: () => _decide(workers[i], true),
-                  onReject: () => _decide(workers[i], false),
-                ),
+                padding: const EdgeInsets.only(bottom: 8),
+                itemCount: workers.length + (chips != null ? 1 : 0),
+                itemBuilder: (_, i) {
+                  if (chips != null) {
+                    if (i == 0) return chips;
+                    i -= 1;
+                  }
+                  return _PersonCard(
+                    worker: workers[i],
+                    officer: widget.officers,
+                    showActions: _index == 0,
+                    onApprove: () => _decide(workers[i], true),
+                    onReject: () => _decide(workers[i], false),
+                  );
+                },
               ),
             );
           },

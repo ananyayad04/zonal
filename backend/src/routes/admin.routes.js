@@ -426,10 +426,13 @@ router.get(
     const { status, zoneCode, category } = req.query;
 
     const zone = zoneCode ? await prisma.zone.findUnique({ where: { code: Number(zoneCode) } }) : null;
+    // A comma-separated list ("ALLOTTED_TO_OFFICER,HELP_REQUESTED") lets a caller
+    // ask for "not yet allotted to a worker, campus-wide" in one request.
+    const statuses = status ? String(status).split(',').filter(Boolean) : null;
 
     const complaints = await prisma.complaint.findMany({
       where: {
-        ...(status ? { status } : {}),
+        ...(statuses ? { status: statuses.length > 1 ? { in: statuses } : statuses[0] } : {}),
         ...(zone ? { zoneId: zone.id } : {}),
         ...(category ? { category } : {}),
       },
@@ -462,7 +465,11 @@ router.get(
 router.post(
   '/complaints/:id/force-allot',
   asyncHandler(async (req, res) => {
-    const schema = z.object({ workerUserId: z.string().min(1) });
+    const schema = z.object({
+      workerUserId: z.string().min(1),
+      instructions: z.string().trim().max(500).optional(),
+      durationHours: z.number().positive().max(2160).optional(),
+    });
     const parsed = schema.safeParse(req.body);
     if (!parsed.success) throw new ApiError(400, 'workerUserId is required');
 
@@ -476,13 +483,21 @@ router.post(
       complaint: { ...complaint, zoneName: complaint.zone.name },
       workerUserId: parsed.data.workerUserId,
       actor: req.user,
+      instructions: parsed.data.instructions,
+      durationHours: parsed.data.durationHours,
     });
 
     res.json({ complaint: serializeComplaint(updated), message: 'Worker allotted by admin.' });
   }),
 );
 
-/** GET /api/admin/free-workers - every free worker on campus, by zone. */
+/**
+ * GET /api/admin/free-workers - every free worker on campus, by zone.
+ *
+ * Each zone also reports its own open-complaint count, so an admin picking a
+ * worker for cross-zone lending can see at a glance whether that worker's own
+ * zone actually has slack to spare, rather than lending blind.
+ */
 router.get(
   '/free-workers',
   asyncHandler(async (_req, res) => {
@@ -490,9 +505,15 @@ router.get(
 
     const result = [];
     for (const z of zones) {
-      const free = await findFreeWorkers(z.id);
+      const [free, openComplaintCount] = await Promise.all([
+        findFreeWorkers(z.id),
+        prisma.complaint.count({
+          where: { zoneId: z.id, status: { notIn: ['CLOSED', 'AUTO_CLOSED', 'REJECTED_INVALID'] } },
+        }),
+      ]);
       result.push({
         zone: { code: z.code, name: z.name, label: z.label },
+        openComplaintCount,
         workers: free.map((w) => ({
           userId: w.userId,
           name: w.user.name,
@@ -502,6 +523,41 @@ router.get(
     }
 
     res.json({ zones: result });
+  }),
+);
+
+/**
+ * GET /api/admin/multi-zone-workers - workers currently on loan to a zone
+ * other than their own, so the admin can see the campus's cross-zone lending
+ * at a glance without digging through individual complaints.
+ */
+router.get(
+  '/multi-zone-workers',
+  asyncHandler(async (_req, res) => {
+    const complaints = await prisma.complaint.findMany({
+      where: { isCrossZone: true, status: { in: ['ALLOTTED_TO_WORKER', 'IN_PROGRESS'] } },
+      include: {
+        zone: true,
+        lendingZone: true,
+        assignedWorker: true,
+      },
+      orderBy: { allottedWorkerAt: 'desc' },
+    });
+
+    res.json({
+      workers: complaints.map((c) => ({
+        complaintId: c.id,
+        complaintRef: c.ref,
+        category: c.category,
+        status: c.status,
+        worker: c.assignedWorker ? { id: c.assignedWorker.id, name: c.assignedWorker.name } : null,
+        homeZone: c.lendingZone
+          ? { code: c.lendingZone.code, name: c.lendingZone.name }
+          : null,
+        workingZone: { code: c.zone.code, name: c.zone.name },
+        allottedAt: c.allottedWorkerAt,
+      })),
+    });
   }),
 );
 

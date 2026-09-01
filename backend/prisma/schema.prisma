@@ -348,6 +348,10 @@ model Complaint {
   assignedWorkerId String?
   assignedWorker   User?   @relation("AssignedWorker", fields: [assignedWorkerId], references: [id])
 
+  /// Free text from whoever allotted this - how much area to cover, in
+  /// whatever language suits the worker. Not translated or validated.
+  workInstructions String?
+
   // --- cross-zone borrowing ---------------------------------------------
   isCrossZone   Boolean @default(false)
   lendingZoneId String?

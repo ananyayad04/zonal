@@ -143,18 +143,18 @@ export async function broadcastEmergency(complaint, { actor = null } = {}) {
       select: { userId: true },
     }),
     prisma.user.findMany({ where: { role: 'ADMIN' }, select: { id: true } }),
-    // Residents and students get it too, as a safety warning rather than a
-    // work order. Flooding, sewage or broken glass is something people nearby
-    // need to know about so they can avoid it - not just something for staff
-    // to clean up.
+    // The reporter's own community gets it too, as a safety warning rather
+    // than a work order - flooding, sewage or broken glass is something
+    // people nearby need to know about so they can avoid it, not just
+    // something for staff to clean up.
     //
-    // Both communities are told, regardless of which one reported it. The
-    // audience split exists so the two do not read each other's day-to-day
-    // complaints; it is not a reason to let someone walk into a hazard. The
-    // person who reported it is excluded; they already know.
+    // Scoped to the reporter's own community (mirrors the same audience
+    // split as ordinary complaints) rather than broadcasting to the other
+    // community as well. The person who reported it is excluded; they
+    // already know.
     prisma.user.findMany({
       where: {
-        role: { in: ['RESIDENT', 'STUDENT'] },
+        role: complaint.reporterRole,
         isActive: true,
         NOT: { id: complaint.reporterId },
       },
@@ -212,7 +212,14 @@ export async function broadcastEmergency(complaint, { actor = null } = {}) {
  * stays owned by the ORIGIN zone's officer - accountability stays where the
  * problem is.
  */
-export async function allotWorker({ complaint, workerUserId, actor, isCrossZone = false }) {
+export async function allotWorker({
+  complaint,
+  workerUserId,
+  actor,
+  isCrossZone = false,
+  instructions,
+  durationHours,
+}) {
   return prisma.$transaction(async (tx) => {
     const profile = await tx.workerProfile.findUnique({
       where: { userId: workerUserId },
@@ -283,6 +290,11 @@ export async function allotWorker({ complaint, workerUserId, actor, isCrossZone 
         officerActedAt: new Date(),
         isCrossZone: crossZone,
         lendingZoneId: crossZone ? profile.zoneId : null,
+        workInstructions: instructions ?? null,
+        // Omitting slaDueAt when no duration was given lets transition()'s
+        // own default (the global SLA_WORKER_COMPLETE_HOURS) apply, same as
+        // before this option existed.
+        ...(durationHours ? { slaDueAt: hoursFromNow(durationHours) } : {}),
       },
       tx,
     });

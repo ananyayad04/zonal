@@ -260,6 +260,7 @@ class _DutyCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final onDuty = status['dutyStatus'] == 'ON';
+    final hasActiveTask = (status['activeTaskCount'] as int? ?? 0) > 0;
     final zone = status['zone'] as Map<String, dynamic>?;
     final zoneColor = colorFromHex(zone?['colorHex'] as String? ?? '#0072B2');
 
@@ -311,9 +312,21 @@ class _DutyCard extends StatelessWidget {
                   child: CircularProgressIndicator(strokeWidth: 2.2),
                 )
               else
-                Switch(value: onDuty, onChanged: onToggle),
+                // Free is the only state the toggle can change - a worker
+                // holding a task cannot go off duty and abandon it, so the
+                // switch is locked rather than letting them tap it and hit
+                // an error.
+                Switch(value: onDuty, onChanged: hasActiveTask ? null : onToggle),
             ],
           ),
+          if (hasActiveTask) ...[
+            const SizedBox(height: 10),
+            const Text(
+              'You have a task allotted, so you cannot go off duty right now. '
+              'Finish it first.',
+              style: TextStyle(fontSize: 12, color: Palette.inkMuted),
+            ),
+          ],
           const SizedBox(height: 14),
           Container(
             padding: const EdgeInsets.symmetric(vertical: 12),

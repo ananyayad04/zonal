@@ -71,33 +71,31 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
               child: ListView(
                 padding: const EdgeInsets.fromLTRB(16, 14, 16, 30),
                 children: [
-                  // Filters in one row above the charts.
-                  Row(
-                    children: [
-                      const Text(
-                        'LAST',
-                        style: TextStyle(
-                          fontSize: 10.5,
-                          letterSpacing: 1.6,
-                          fontWeight: FontWeight.w700,
-                          color: Palette.inkMuted,
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      for (final d in [7, 30, 90])
-                        Padding(
-                          padding: const EdgeInsets.only(right: 7),
-                          child: ChoiceChip(
-                            selected: _days == d,
-                            onSelected: (_) {
-                              setState(() => _days = d);
-                              _refresh();
-                            },
-                            label: Text('${d}d', style: const TextStyle(fontSize: 12)),
-                            visualDensity: VisualDensity.compact,
+                  // Filters as a single pill-shaped segmented row, so the
+                  // page opens with one clear control rather than loose text
+                  // and chips side by side.
+                  Container(
+                    padding: const EdgeInsets.all(4),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Palette.grid),
+                    ),
+                    child: Row(
+                      children: [
+                        for (final d in [7, 30, 90])
+                          Expanded(
+                            child: _RangeSegment(
+                              label: '${d}d',
+                              selected: _days == d,
+                              onTap: () {
+                                setState(() => _days = d);
+                                _refresh();
+                              },
+                            ),
                           ),
-                        ),
-                    ],
+                      ],
+                    ),
                   ),
 
                   const SizedBox(height: 18),
@@ -114,6 +112,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                     children: [
                       Expanded(
                         child: _StatTile(
+                          icon: Icons.check_circle_outline,
                           value: rates['resolutionRatePct'] == null
                               ? '—'
                               : '${rates['resolutionRatePct']}%',
@@ -123,6 +122,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                       const SizedBox(width: 10),
                       Expanded(
                         child: _StatTile(
+                          icon: Icons.schedule,
                           value: formatDuration(avgs['endToEndResolution'] as int?),
                           label: 'Avg resolution',
                         ),
@@ -130,6 +130,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                       const SizedBox(width: 10),
                       Expanded(
                         child: _StatTile(
+                          icon: Icons.handshake_outlined,
                           value: rates['crossZonePct'] == null
                               ? '—'
                               : '${rates['crossZonePct']}%',
@@ -138,6 +139,20 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                       ),
                     ],
                   ),
+
+                  if (byZone.any((z) => (z['total'] as int? ?? 0) > 0)) ...[
+                    const SizedBox(height: 12),
+                    Builder(builder: (context) {
+                      final busiest = byZone.reduce((a, b) =>
+                          (a['total'] as int? ?? 0) >= (b['total'] as int? ?? 0) ? a : b);
+                      return InfoBanner(
+                        icon: Icons.priority_high,
+                        color: Palette.warning,
+                        text: '${busiest['name']} is the most complaint-prone zone: '
+                            '${busiest['total']} complaint(s) in the last $_days days.',
+                      );
+                    }),
+                  ],
 
                   // Auto-closed is reported separately from resident-approved,
                   // so a timeout can never be passed off as approval.
@@ -152,7 +167,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                     ),
                   ],
 
-                  const SizedBox(height: 26),
+                  const SizedBox(height: 22),
                   _ChartSection(
                     title: 'WHERE THE PROBLEMS ARE',
                     caption: 'Complaints per zone',
@@ -169,7 +184,22 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                           ),
                   ),
 
-                  const SizedBox(height: 26),
+                  const SizedBox(height: 14),
+                  _ChartSection(
+                    title: 'STAFFING',
+                    caption: 'Active workers per zone',
+                    child: _BarChart(
+                      bars: byZone
+                          .map((z) => _Bar(
+                                label: '${z['name']}',
+                                sublabel: '${z['freeWorkerCount'] ?? 0} free',
+                                value: (z['workerCount'] as int?) ?? 0,
+                              ))
+                          .toList(),
+                    ),
+                  ),
+
+                  const SizedBox(height: 14),
                   _ChartSection(
                     title: 'WHAT KIND OF PROBLEM',
                     caption: 'Complaints per category',
@@ -184,22 +214,34 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                     ),
                   ),
 
-                  const SizedBox(height: 26),
+                  const SizedBox(height: 14),
                   _ChartSection(
                     title: 'HOW LONG EACH STAGE TAKES',
                     caption: 'Average, from one handover to the next',
                     child: _StageBars(avgs: avgs),
                   ),
 
-                  const SizedBox(height: 26),
+                  const SizedBox(height: 14),
                   _ChartSection(
                     title: 'WHERE THINGS STAND',
                     caption: 'Current status of every complaint',
                     child: _StatusList(byStatus: byStatus),
                   ),
 
-                  const SizedBox(height: 24),
-                  _ZoneTable(rows: byZone, compact: true),
+                  // The exact-numbers table only when it isn't already on
+                  // screen from the toggle above - otherwise the same table
+                  // showed twice.
+                  if (!_showTable) ...[
+                    const SizedBox(height: 14),
+                    _ChartSection(
+                      title: 'ZONE BY ZONE',
+                      caption: 'Every number, exactly',
+                      footer: 'Borrowed = complaints in this zone that needed a '
+                          'worker from somewhere else. A high number means the '
+                          'zone is understaffed.',
+                      child: _ZoneTable(rows: byZone),
+                    ),
+                  ],
                 ],
               ),
             );
@@ -267,10 +309,11 @@ class _HeroStat extends StatelessWidget {
 }
 
 class _StatTile extends StatelessWidget {
+  final IconData icon;
   final String value;
   final String label;
 
-  const _StatTile({required this.value, required this.label});
+  const _StatTile({required this.icon, required this.value, required this.label});
 
   @override
   Widget build(BuildContext context) {
@@ -284,6 +327,8 @@ class _StatTile extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          Icon(icon, size: 16, color: AppTheme.seed),
+          const SizedBox(height: 8),
           Text(
             value,
             style: const TextStyle(
@@ -304,43 +349,102 @@ class _StatTile extends StatelessWidget {
   }
 }
 
+/// One segment of the day-range control - a pill that fills solid when
+/// selected, so the whole row reads as one control rather than loose chips.
+class _RangeSegment extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _RangeSegment({required this.label, required this.selected, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(9),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          padding: const EdgeInsets.symmetric(vertical: 9),
+          decoration: BoxDecoration(
+            color: selected ? AppTheme.seed : Colors.transparent,
+            borderRadius: BorderRadius.circular(9),
+          ),
+          alignment: Alignment.center,
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              color: selected ? Colors.white : Palette.inkSecondary,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Every chart lives in the same boxed card the hero stat and stat tiles use,
+/// so the page reads as one consistent stack rather than half boxed content
+/// and half bare list items.
 class _ChartSection extends StatelessWidget {
   final String title;
   final String caption;
   final Widget child;
+  final String? footer;
 
   const _ChartSection({
     required this.title,
     required this.caption,
     required this.child,
+    this.footer,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          title,
-          style: const TextStyle(
-            fontSize: 10.5,
-            letterSpacing: 1.8,
-            fontWeight: FontWeight.w700,
-            color: Palette.inkMuted,
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Palette.grid),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: const TextStyle(
+              fontSize: 10.5,
+              letterSpacing: 1.8,
+              fontWeight: FontWeight.w700,
+              color: Palette.inkMuted,
+            ),
           ),
-        ),
-        const SizedBox(height: 3),
-        Text(
-          caption,
-          style: const TextStyle(
-            fontSize: 15,
-            fontWeight: FontWeight.w700,
-            color: Palette.inkPrimary,
+          const SizedBox(height: 3),
+          Text(
+            caption,
+            style: const TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w700,
+              color: Palette.inkPrimary,
+            ),
           ),
-        ),
-        const SizedBox(height: 14),
-        child,
-      ],
+          const SizedBox(height: 16),
+          child,
+          if (footer != null) ...[
+            const SizedBox(height: 10),
+            Text(
+              footer!,
+              style: const TextStyle(fontSize: 11.5, height: 1.35, color: Palette.inkMuted),
+            ),
+          ],
+        ],
+      ),
     );
   }
 }
@@ -601,27 +705,14 @@ class _StatusList extends StatelessWidget {
 /// can be read exactly.
 class _ZoneTable extends StatelessWidget {
   final List<Map<String, dynamic>> rows;
-  final bool compact;
 
-  const _ZoneTable({required this.rows, this.compact = false});
+  const _ZoneTable({required this.rows});
 
   @override
   Widget build(BuildContext context) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (compact) ...[
-          const Text(
-            'ZONE BY ZONE',
-            style: TextStyle(
-              fontSize: 10.5,
-              letterSpacing: 1.8,
-              fontWeight: FontWeight.w700,
-              color: Palette.inkMuted,
-            ),
-          ),
-          const SizedBox(height: 12),
-        ],
         SingleChildScrollView(
           scrollDirection: Axis.horizontal,
           child: DataTable(
@@ -641,6 +732,7 @@ class _ZoneTable extends StatelessWidget {
               DataColumn(label: Text('OPEN'), numeric: true),
               DataColumn(label: Text('CLOSED'), numeric: true),
               DataColumn(label: Text('BORROWED'), numeric: true),
+              DataColumn(label: Text('WORKERS'), numeric: true),
               DataColumn(label: Text('AVG TIME')),
             ],
             rows: [
@@ -664,19 +756,12 @@ class _ZoneTable extends StatelessWidget {
                   DataCell(Text('${z['open'] ?? 0}')),
                   DataCell(Text('${z['closed'] ?? 0}')),
                   DataCell(Text('${z['crossZoneBorrowed'] ?? 0}')),
+                  DataCell(Text('${z['workerCount'] ?? 0}')),
                   DataCell(Text(formatDuration(z['avgResolutionMinutes'] as int?))),
                 ]),
             ],
           ),
         ),
-        if (compact) ...[
-          const SizedBox(height: 8),
-          const Text(
-            'Borrowed = complaints in this zone that needed a worker from '
-            'somewhere else. A high number means the zone is understaffed.',
-            style: TextStyle(fontSize: 11.5, height: 1.35, color: Palette.inkMuted),
-          ),
-        ],
       ],
     );
   }
