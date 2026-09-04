@@ -24,6 +24,14 @@ enum Role {
   WORKER
   OFFICER
   ADMIN
+  /// Campus-wide, admin-level powers over complaints and allotment: can
+  /// verify a freshly-submitted complaint, see every allotted task across
+  /// every zone, and allot any complaint to any free worker anywhere on
+  /// campus. Created directly by the Admin - no self-registration.
+  WORKER_SUPERVISOR
+  /// Owns hostel-internal complaints for exactly one hostel (Landmark.wardenId).
+  /// Created directly by the Admin - no self-registration.
+  WARDEN
 }
 
 /// Workers self-register and must be verified by the Admin before they can
@@ -52,6 +60,7 @@ enum ComplaintStatus {
   UNDER_REVIEW // waiting on Admin to confirm it is genuine
   REJECTED_INVALID // Admin rejected it (spam / unclear / not cleanliness)  [terminal]
   ALLOTTED_TO_OFFICER // engine auto-routed it to that zone's officer
+  ALLOTTED_TO_HOSTEL_STAFF // hostel complaint - awaiting Admin/Warden/Supervisor to allot a worker
   HELP_REQUESTED // officer's workers all busy, asking other officers
   ALLOTTED_TO_WORKER // a worker has been assigned
   IN_PROGRESS // worker tapped Start Work
@@ -137,17 +146,23 @@ model User {
   // An OFFICER's application, pending until an admin verifies it
   officerProfile OfficerProfile?
 
+  // A WARDEN owns exactly one hostel (via Landmark.wardenId). Created
+  // directly by the Admin, so there is no pending "application" for this.
+  hostelOwned Landmark? @relation("HostelWarden")
+
   // Relations back to complaints, by the hat this user was wearing
   complaintsReported  Complaint[] @relation("Reporter")
   complaintsApproved  Complaint[] @relation("ApprovedByAdmin")
   complaintsAsOfficer Complaint[] @relation("AssignedOfficer")
   complaintsAsWorker  Complaint[] @relation("AssignedWorker")
+  complaintsAsWarden  Complaint[] @relation("AssignedWarden")
 
   helpRequestsSent     HelpRequest[] @relation("HelpFromOfficer")
   helpRequestsAccepted HelpRequest[] @relation("HelpAcceptedByOfficer")
 
   statusLogs    StatusLog[]
   notifications Notification[]
+  auditLogs     AuditLog[]      @relation("AuditActor")
 
   @@index([role])
 }
@@ -210,6 +225,12 @@ model Landmark {
   sortOrder Int              @default(0)
   isActive  Boolean          @default(true)
 
+  /// Set only when this landmark is a hostel (BOYS_HOSTEL/GIRLS_HOSTEL) - the
+  /// one Warden who owns it, mirroring Zone.officerId. Assigned by the Admin;
+  /// there is no self-registration path for Warden.
+  wardenId String? @unique
+  warden   User?   @relation("HostelWarden", fields: [wardenId], references: [id], onDelete: SetNull)
+
   complaints Complaint[]
 
   createdAt DateTime @default(now())
@@ -266,6 +287,13 @@ model Complaint {
   /// something is genuinely urgent, and the admin can still reject it after
   /// the fact.
   isEmergency Boolean @default(false)
+
+  /// Set when the reporter flagged this as being from inside a hostel. Skips
+  /// the normal officer queue the same way an emergency skips admin
+  /// verification - it goes straight to Admin + the hostel's Warden + every
+  /// Worker Supervisor instead. Requires a BOYS_HOSTEL/GIRLS_HOSTEL landmark.
+  /// Mutually exclusive with isEmergency.
+  isHostelComplaint Boolean @default(false)
 
   // --- compulsory geotag -------------------------------------------------
   /// The confirmed pin - where the complaint actually is. This is what
@@ -348,6 +376,13 @@ model Complaint {
   assignedWorkerId String?
   assignedWorker   User?   @relation("AssignedWorker", fields: [assignedWorkerId], references: [id])
 
+  /// Set once, when a hostel complaint is broadcast - the hostel's Warden at
+  /// that moment. Frozen from then on, same as assignedOfficerId: reassigning
+  /// the hostel to a new warden later must not silently move a complaint
+  /// already in flight.
+  assignedWardenId String?
+  assignedWarden   User?   @relation("AssignedWarden", fields: [assignedWardenId], references: [id])
+
   /// Free text from whoever allotted this - how much area to cover, in
   /// whatever language suits the worker. Not translated or validated.
   workInstructions String?
@@ -398,6 +433,7 @@ model Complaint {
   @@index([zoneId, status])
   @@index([assignedOfficerId, status])
   @@index([assignedWorkerId, status])
+  @@index([assignedWardenId, status])
   @@index([reporterId])
 }
 
@@ -473,6 +509,36 @@ model StatusLog {
   at   DateTime @default(now())
 
   @@index([complaintId, at])
+}
+
+/// Personnel and appointment actions the Admin takes - who was verified,
+/// created, or appointed to run a zone or hostel, and when. Deliberately
+/// narrower than StatusLog: complaint transitions already have their own
+/// trail there. This is only the "who runs what" decisions a formal admin
+/// role is accountable for.
+model AuditLog {
+  id String @id @default(cuid())
+
+  actorId   String?
+  actor     User?   @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+  /// Snapshotted so the log still reads correctly if the actor's account is
+  /// later renamed or removed.
+  actorName String
+
+  /// e.g. "WORKER_VERIFIED", "OFFICER_CREATED", "WARDEN_CREATED",
+  /// "SUPERVISOR_CREATED", "OFFICER_REASSIGNED", "WARDEN_REASSIGNED".
+  action String
+
+  /// What the action was about - a user, a zone, a hostel.
+  targetType  String
+  targetId    String?
+  targetLabel String
+
+  note String?
+
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
 }
 
 model Notification {

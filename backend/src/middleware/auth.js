@@ -33,6 +33,7 @@ export async function authenticate(req, _res, next) {
         workerProfile: { include: { zone: true } },
         officerProfile: { include: { zone: true } },
         zoneOwned: true,
+        hostelOwned: true,
       },
     });
 

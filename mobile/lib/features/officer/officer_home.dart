@@ -10,6 +10,7 @@ import '../../shared/complaint_card.dart';
 import '../../shared/ui.dart';
 import '../shared/app_drawer.dart';
 import '../shared/complaint_detail_screen.dart';
+import '../shared/complaint_search_screen.dart';
 import 'allot_sheet.dart';
 import 'help_inbox_screen.dart';
 
@@ -118,7 +119,16 @@ class _OfficerHomeState extends State<OfficerHome> {
     return Scaffold(
       appBar: AppBar(
         title: Text(zone == null ? 'My zone' : zone.name),
-        actions: const [NotificationBell()],
+        actions: [
+          IconButton(
+            tooltip: 'Find a complaint',
+            icon: const Icon(Icons.search),
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const ComplaintSearchScreen()),
+            ),
+          ),
+          const NotificationBell(),
+        ],
       ),
       drawer: const AppDrawer(),
       body: FutureBuilder<Map<String, dynamic>>(

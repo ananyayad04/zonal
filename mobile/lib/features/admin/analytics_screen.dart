@@ -6,6 +6,24 @@ import '../../core/palette.dart';
 import '../../core/theme.dart';
 import '../../shared/ui.dart';
 
+const _sourceLabels = <String, String>{
+  'RESIDENT': 'Residents',
+  'STUDENT': 'Students',
+  'WORKER_SUPERVISOR': 'Created by supervisors',
+};
+
+const _escalationReasonLabels = <String, String>{
+  'NO_ZONE_OFFICER': 'Zone has no officer',
+  'OFFICER_SLA_BREACH': 'Officer missed allotment deadline',
+  'WORKER_SLA_BREACH': 'Worker missed completion deadline',
+  'HELP_REQUEST_EXPIRED': 'No zone answered a help request',
+  'NO_FREE_WORKER_CAMPUS_WIDE': 'No worker free anywhere',
+  'REJECTED_TWICE': 'Resident rejected the work twice',
+  'NO_WARDEN_ASSIGNED': 'Hostel has no warden',
+  'HOSTEL_STAFF_SLA_BREACH': 'Hostel complaint missed allotment deadline',
+  'HOSTEL_REJECTED_TWICE': 'Warden rejected the work twice',
+};
+
 /// Analytics.
 ///
 /// Colour is assigned by the job it does, which is why there are no eight-hue
@@ -63,6 +81,12 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
             final rates = data['rates'] as Map<String, dynamic>;
             final avgs = data['averageMinutes'] as Map<String, dynamic>;
             final byZone = (data['byZone'] as List).cast<Map<String, dynamic>>();
+            final byHostel = (data['byHostel'] as List? ?? const [])
+                .cast<Map<String, dynamic>>();
+            final bySource = (data['bySource'] as List? ?? const [])
+                .cast<Map<String, dynamic>>();
+            final escalationReasons =
+                (data['escalationReasons'] as List? ?? const []).cast<Map<String, dynamic>>();
             final byCategory = (data['byCategory'] as List).cast<Map<String, dynamic>>();
             final byStatus = data['byStatus'] as Map<String, dynamic>;
 
@@ -104,7 +128,8 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                   _HeroStat(
                     value: '${totals['total'] ?? 0}',
                     label: 'complaints filed',
-                    detail: '${totals['closed'] ?? 0} closed · ${totals['open'] ?? 0} still open',
+                    detail: '${totals['closed'] ?? 0} closed · ${totals['open'] ?? 0} still open'
+                        '${(totals['hostelComplaints'] as int? ?? 0) > 0 ? ' · ${totals['hostelComplaints']} from hostels' : ''}',
                   ),
 
                   const SizedBox(height: 16),
@@ -240,6 +265,55 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                           'worker from somewhere else. A high number means the '
                           'zone is understaffed.',
                       child: _ZoneTable(rows: byZone),
+                    ),
+                  ],
+
+                  // Citizen-reported vs staff-initiated - only worth a section
+                  // once there is more than one source to compare.
+                  if (bySource.length > 1) ...[
+                    const SizedBox(height: 14),
+                    _ChartSection(
+                      title: 'WHO FILED IT',
+                      caption: 'Citizen complaints vs. work supervisors created directly',
+                      child: _BarChart(
+                        bars: bySource
+                            .map((s) => _Bar(
+                                  label: _sourceLabels[s['reporterRole']] ??
+                                      s['reporterRole'] as String,
+                                  value: (s['count'] as int?) ?? 0,
+                                ))
+                            .toList(),
+                      ),
+                    ),
+                  ],
+
+                  // Hostels only ever generate hostel complaints, so an empty
+                  // campus with none filed yet would just be a table of zeros.
+                  if (byHostel.any((h) => (h['total'] as int? ?? 0) > 0)) ...[
+                    const SizedBox(height: 14),
+                    _ChartSection(
+                      title: 'HOSTELS',
+                      caption: 'Complaints filed from inside each hostel',
+                      footer: 'A hostel with no warden shown cannot be allotted a '
+                          'worker until the admin assigns one.',
+                      child: _HostelTable(rows: byHostel),
+                    ),
+                  ],
+
+                  if (escalationReasons.isNotEmpty) ...[
+                    const SizedBox(height: 14),
+                    _ChartSection(
+                      title: 'WHY THINGS ESCALATED',
+                      caption: 'Every reason a complaint reached the admin',
+                      child: _BarChart(
+                        bars: escalationReasons
+                            .map((e) => _Bar(
+                                  label: _escalationReasonLabels[e['reason']] ??
+                                      e['reason'] as String,
+                                  value: (e['count'] as int?) ?? 0,
+                                ))
+                            .toList(),
+                      ),
                     ),
                   ],
                 ],
@@ -763,6 +837,60 @@ class _ZoneTable extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// The per-hostel table - mirrors _ZoneTable's shape, but a hostel has a
+/// warden instead of an officer/worker roster, and no cross-zone borrowing.
+class _HostelTable extends StatelessWidget {
+  final List<Map<String, dynamic>> rows;
+
+  const _HostelTable({required this.rows});
+
+  @override
+  Widget build(BuildContext context) {
+    // A campus can have a couple of dozen hostels - only show the ones that
+    // have actually had a complaint, so the table isn't mostly zero rows.
+    final active = rows.where((h) => (h['total'] as int? ?? 0) > 0).toList();
+
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: DataTable(
+        headingRowHeight: 38,
+        dataRowMinHeight: 38,
+        dataRowMaxHeight: 46,
+        columnSpacing: 20,
+        headingTextStyle: const TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+          color: Palette.inkMuted,
+        ),
+        dataTextStyle: const TextStyle(fontSize: 12.5, color: Palette.inkPrimary),
+        columns: const [
+          DataColumn(label: Text('HOSTEL')),
+          DataColumn(label: Text('WARDEN')),
+          DataColumn(label: Text('TOTAL'), numeric: true),
+          DataColumn(label: Text('OPEN'), numeric: true),
+          DataColumn(label: Text('CLOSED'), numeric: true),
+          DataColumn(label: Text('AVG TIME')),
+        ],
+        rows: [
+          for (final h in active)
+            DataRow(cells: [
+              DataCell(Text(h['name'] as String? ?? '')),
+              DataCell(
+                (h['warden'] as Map<String, dynamic>?) != null
+                    ? Text((h['warden'] as Map<String, dynamic>)['name'] as String)
+                    : const Text('None', style: TextStyle(color: Palette.warning)),
+              ),
+              DataCell(Text('${h['total'] ?? 0}')),
+              DataCell(Text('${h['open'] ?? 0}')),
+              DataCell(Text('${h['closed'] ?? 0}')),
+              DataCell(Text(formatDuration(h['avgResolutionMinutes'] as int?))),
+            ]),
+        ],
+      ),
     );
   }
 }

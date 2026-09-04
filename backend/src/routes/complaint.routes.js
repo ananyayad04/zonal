@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
 import { env } from '../config/env.js';
 import { ApiError, asyncHandler } from '../middleware/error.js';
-import { authenticate } from '../middleware/auth.js';
+import { authenticate, requireRole } from '../middleware/auth.js';
 import {
   uploadMedia,
   mediaTypeFor,
@@ -13,7 +13,11 @@ import {
 import { putMedia, removeMedia } from '../lib/storage.js';
 import { detectZone, haversineMeters } from '../utils/geo.js';
 import { transition, notify, notifyMany, generateRef } from '../services/workflow.js';
-import { releaseWorker, broadcastEmergency } from '../services/allocation.js';
+import {
+  releaseWorker,
+  broadcastEmergency,
+  broadcastHostelComplaint,
+} from '../services/allocation.js';
 import { findRecurrence } from '../services/insights.js';
 import {
   complaintInclude,
@@ -47,6 +51,12 @@ const createSchema = z.object({
   priority: z.enum(['LOW', 'MEDIUM', 'HIGH']).optional(),
   /// Emergency reports skip admin verification and are broadcast campus-wide.
   isEmergency: z
+    .union([z.boolean(), z.enum(['true', 'false'])])
+    .transform((v) => v === true || v === 'true')
+    .optional(),
+  /// From inside a hostel - skips the officer queue and goes straight to
+  /// Admin, that hostel's Warden, and every Worker Supervisor instead.
+  isHostelComplaint: z
     .union([z.boolean(), z.enum(['true', 'false'])])
     .transform((v) => v === true || v === 'true')
     .optional(),
@@ -119,7 +129,13 @@ router.post(
       gpsAccuracyM,
       locationCapturedAt,
       isEmergency = false,
+      isHostelComplaint = false,
     } = parsed.data;
+
+    if (isEmergency && isHostelComplaint) {
+      cleanUpFiles(files);
+      throw new ApiError(400, 'A complaint cannot be both an emergency and a hostel complaint');
+    }
 
     // How far the pin was moved off the raw GPS reading, if at all.
     const hasRawFix = Number.isFinite(gpsLat) && Number.isFinite(gpsLng);
@@ -141,6 +157,10 @@ router.post(
     if (!landmark || !landmark.isActive) {
       cleanUpFiles(files);
       throw new ApiError(400, 'Choose a valid place or landmark');
+    }
+    if (isHostelComplaint && !['BOYS_HOSTEL', 'GIRLS_HOSTEL'].includes(landmark.category)) {
+      cleanUpFiles(files);
+      throw new ApiError(400, 'A hostel complaint must pick a hostel as its landmark');
     }
 
     let meta = [];
@@ -240,6 +260,7 @@ router.post(
         locationAdjustedM: locationAdjusted ? Math.round(adjustedM) : null,
         priority: isEmergency ? 'HIGH' : (priority ?? 'MEDIUM'),
         isEmergency,
+        isHostelComplaint,
         zoneId: zone.id,
         zoneOverridden,
         zoneResolvedBy,
@@ -289,6 +310,18 @@ router.post(
           `Emergency reported. ${notified.total} people alerted â€” ` +
           `${notified.officers} officers, ${notified.workers} on-duty workers, ` +
           `${notified.residents} residents.`,
+      });
+    }
+
+    // From inside a hostel: skip the officer queue entirely, straight to
+    // Admin, the hostel's Warden and every Worker Supervisor.
+    if (isHostelComplaint) {
+      await broadcastHostelComplaint(complaint, { actor: req.user });
+      const full = await loadComplaintForResponse(prisma, complaint.id);
+
+      return res.status(201).json({
+        complaint: serializeComplaint(full),
+        message: 'Hostel complaint submitted. The warden has been notified.',
       });
     }
 
@@ -435,6 +468,30 @@ router.get(
   }),
 );
 
+/**
+ * GET /api/complaints/by-ref/:ref
+ *
+ * Resolves a human-readable ref ("SC81713") straight to the complaint id, so
+ * staff can jump to a complaint from a phone call without first working out
+ * which queue it happens to be sitting in. This only resolves the id -
+ * whether the caller can actually open it is still decided by GET /:id below,
+ * which every screen already routes through.
+ */
+router.get(
+  '/by-ref/:ref',
+  authenticate,
+  requireRole('ADMIN', 'OFFICER', 'WORKER_SUPERVISOR', 'WARDEN'),
+  asyncHandler(async (req, res) => {
+    const ref = req.params.ref.trim().toUpperCase();
+    const complaint = await prisma.complaint.findUnique({
+      where: { ref },
+      select: { id: true, ref: true },
+    });
+    if (!complaint) throw new ApiError(404, `No complaint found with reference ${ref}`);
+    res.json({ id: complaint.id, ref: complaint.ref });
+  }),
+);
+
 /** GET /api/complaints/:id - full detail plus the audit trail. */
 router.get(
   '/:id',
@@ -475,6 +532,8 @@ router.get(
     const permitted =
       role === 'ADMIN' ||
       role === 'OFFICER' ||
+      role === 'WORKER_SUPERVISOR' ||
+      (role === 'WARDEN' && complaint.assignedWardenId === userId) ||
       isOwn ||
       isPeer ||
       complaint.assignedWorkerId === userId;
@@ -528,6 +587,9 @@ router.post(
 
     if (complaint.reporterId !== req.user.id) {
       throw new ApiError(403, 'Only the person who filed this complaint can confirm it');
+    }
+    if (complaint.isHostelComplaint) {
+      throw new ApiError(409, 'Hostel complaints are confirmed by the warden, not the reporter.');
     }
     if (complaint.status !== 'WORK_DONE') {
       throw new ApiError(409, 'This complaint is not waiting for your confirmation');

@@ -1,10 +1,18 @@
 import { Router } from 'express';
+import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
+import { env } from '../config/env.js';
 import { ApiError, asyncHandler } from '../middleware/error.js';
 import { authenticate, requireRole } from '../middleware/auth.js';
-import { transition, notify, notifyMany } from '../services/workflow.js';
-import { routeToZoneOfficer, allotWorker, findFreeWorkers } from '../services/allocation.js';
+import { transition, notify, notifyMany, generateRef } from '../services/workflow.js';
+import { logAudit } from '../services/audit.js';
+import {
+  routeToZoneOfficer,
+  allotWorker,
+  findFreeWorkers,
+  findAllFreeWorkersCampusWide,
+} from '../services/allocation.js';
 import {
   complaintInclude,
   serializeComplaint,
@@ -13,17 +21,35 @@ import {
 
 const router = Router();
 
-router.use(authenticate, requireRole('ADMIN'));
+router.use(authenticate);
+
+/**
+ * Worker Supervisor gets the same campus-wide reach over complaints and
+ * allotment that Admin has - verification, monitoring, force-allot, free
+ * workers. It does NOT get personnel verification (worker/officer/warden),
+ * zone drawing, or hostel/warden/supervisor account management - those stay
+ * Admin-only below.
+ */
+const staffOrAdmin = requireRole('ADMIN', 'WORKER_SUPERVISOR');
 
 /** GET /api/admin/dashboard - the two queues the admin must clear, plus totals. */
 router.get(
   '/dashboard',
+  staffOrAdmin,
   asyncHandler(async (_req, res) => {
-    const [pendingWorkers, pendingOfficers, pendingComplaints, escalated, byStatus, zones] =
-      await Promise.all([
+    const [
+      pendingWorkers,
+      pendingOfficers,
+      pendingComplaints,
+      pendingHostelAllotment,
+      escalated,
+      byStatus,
+      zones,
+    ] = await Promise.all([
       prisma.workerProfile.count({ where: { approvalStatus: 'PENDING' } }),
       prisma.officerProfile.count({ where: { approvalStatus: 'PENDING' } }),
       prisma.complaint.count({ where: { status: 'UNDER_REVIEW' } }),
+      prisma.complaint.count({ where: { status: 'ALLOTTED_TO_HOSTEL_STAFF' } }),
       prisma.complaint.count({ where: { status: 'ESCALATED' } }),
       prisma.complaint.groupBy({ by: ['status'], _count: { _all: true } }),
       prisma.zone.findMany({ orderBy: { code: 'asc' }, include: { officer: true } }),
@@ -54,10 +80,64 @@ router.get(
     );
 
     res.json({
-      queues: { pendingWorkers, pendingOfficers, pendingComplaints, escalated },
+      queues: {
+        pendingWorkers,
+        pendingOfficers,
+        pendingComplaints,
+        pendingHostelAllotment,
+        escalated,
+      },
       statusCounts: Object.fromEntries(byStatus.map((r) => [r.status, r._count._all])),
       zones: zoneStats,
     });
+  }),
+);
+
+/**
+ * GET /api/admin/attention
+ *
+ * Every complaint waiting on a human right now - verification, allotment
+ * (zone or hostel), or escalated - merged into one list and sorted by
+ * urgency. The dashboard's separate counts say how many of each kind there
+ * are; this says which ONE to look at first: overdue before on-time, and
+ * soonest-due before anything with slack left.
+ */
+router.get(
+  '/attention',
+  staffOrAdmin,
+  asyncHandler(async (_req, res) => {
+    const complaints = await prisma.complaint.findMany({
+      where: {
+        status: {
+          in: ['UNDER_REVIEW', 'ALLOTTED_TO_OFFICER', 'HELP_REQUESTED', 'ALLOTTED_TO_HOSTEL_STAFF', 'ESCALATED'],
+        },
+      },
+      include: complaintInclude,
+      orderBy: { submittedAt: 'asc' },
+    });
+
+    const items = complaints
+      .map((c) => ({
+        ...serializeComplaint(c),
+        actionType:
+          c.status === 'UNDER_REVIEW'
+            ? 'VERIFY'
+            : c.status === 'ESCALATED'
+              ? 'ESCALATED'
+              : c.isHostelComplaint
+                ? 'ALLOT_HOSTEL'
+                : 'ALLOT_ZONE',
+      }))
+      .sort((a, b) => {
+        // Overdue first, always - regardless of what else is going on.
+        if (a.isOverdue !== b.isOverdue) return a.isOverdue ? -1 : 1;
+        // Then soonest-due first; nothing-due items sort last.
+        const ad = a.slaDueAt ? new Date(a.slaDueAt).getTime() : Infinity;
+        const bd = b.slaDueAt ? new Date(b.slaDueAt).getTime() : Infinity;
+        return ad - bd;
+      });
+
+    res.json({ items });
   }),
 );
 
@@ -68,6 +148,7 @@ router.get(
 /** GET /api/admin/workers?status=PENDING */
 router.get(
   '/workers',
+  requireRole('ADMIN'),
   asyncHandler(async (req, res) => {
     const status = req.query.status ?? 'PENDING';
 
@@ -105,6 +186,7 @@ router.get(
  */
 router.post(
   '/workers/:userId/verify',
+  requireRole('ADMIN'),
   asyncHandler(async (req, res) => {
     const schema = z.object({
       approve: z.coerce.boolean(),
@@ -150,6 +232,15 @@ router.post(
       });
     }
 
+    await logAudit({
+      actor: req.user,
+      action: parsed.data.approve ? 'WORKER_VERIFIED' : 'WORKER_REJECTED',
+      targetType: 'USER',
+      targetId: profile.userId,
+      targetLabel: profile.user.name,
+      note: parsed.data.approve ? null : (parsed.data.note ?? null),
+    });
+
     res.json({
       approvalStatus: updated.approvalStatus,
       message: parsed.data.approve
@@ -160,16 +251,18 @@ router.post(
 );
 
 // ---------------------------------------------------------------------------
-// Officer verification
+// Officer verification (legacy)
 //
-// Officers self-register the same way workers do. What differs is what
-// approval grants: a zone has exactly one officer, so approving an application
-// is an appointment, and the zone must actually be free at that moment.
+// Zone officers are now fixed appointments created directly by the Admin
+// (POST /admin/zones/officers) - no new applications land here. Kept only so
+// any application already in the pipeline from before that change can still
+// be reviewed; the endpoint is otherwise dormant.
 // ---------------------------------------------------------------------------
 
 /** GET /api/admin/officers?status=PENDING */
 router.get(
   '/officers',
+  requireRole('ADMIN'),
   asyncHandler(async (req, res) => {
     const status = req.query.status ?? 'PENDING';
 
@@ -210,6 +303,7 @@ router.get(
  */
 router.post(
   '/officers/:userId/verify',
+  requireRole('ADMIN'),
   asyncHandler(async (req, res) => {
     const schema = z.object({
       approve: z.coerce.boolean(),
@@ -284,6 +378,15 @@ router.post(
       }
     }
 
+    await logAudit({
+      actor: req.user,
+      action: parsed.data.approve ? 'OFFICER_VERIFIED' : 'OFFICER_REJECTED',
+      targetType: 'USER',
+      targetId: profile.userId,
+      targetLabel: profile.user.name,
+      note: parsed.data.approve ? `Appointed to ${profile.zone.name}` : (parsed.data.note ?? null),
+    });
+
     res.json({
       approvalStatus: updated.approvalStatus,
       message: parsed.data.approve
@@ -297,9 +400,121 @@ router.post(
 // Complaint verification
 // ---------------------------------------------------------------------------
 
+/**
+ * POST /api/admin/complaints - Worker Supervisor creates a work order
+ * directly, with no citizen complaint behind it: which zone, what type of
+ * work, a plain description of the area and what needs doing, and
+ * optionally a worker to allot straight away in the same step.
+ *
+ * Worker-Supervisor-only, not Admin: this is proactive work the supervisor
+ * is initiating themselves, distinct from the citizen-complaint queue above.
+ */
+router.post(
+  '/complaints',
+  requireRole('WORKER_SUPERVISOR'),
+  asyncHandler(async (req, res) => {
+    const schema = z.object({
+      zoneCode: z.coerce.number().int().min(1).max(8),
+      category: z.enum([
+        'GARBAGE',
+        'OVERFLOWING_BIN',
+        'WASHROOM',
+        'WATER_LOGGING',
+        'DRAINAGE',
+        'PEST',
+        'OTHER',
+      ]),
+      /// Plain language: which area (e.g. "from Gate 2 to the canteen") and
+      /// what needs doing. One simple field rather than separate structured
+      /// location fields - a supervisor describing a stretch of ground does
+      /// not need a GPS pin the way a citizen complaint does.
+      description: z.string().trim().min(3, 'Describe the work').max(1000),
+      workerUserId: z.string().min(1).optional(),
+      instructions: z.string().trim().max(500).optional(),
+      durationHours: z.number().positive().max(2160).optional(),
+    });
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) {
+      throw new ApiError(
+        400,
+        'A zone, a type of work and a description are required',
+        parsed.error.flatten().fieldErrors,
+      );
+    }
+
+    const zone = await prisma.zone.findUnique({ where: { code: parsed.data.zoneCode } });
+    if (!zone) throw new ApiError(404, `Zone ${parsed.data.zoneCode} not found`);
+
+    const ref = await generateRef();
+
+    const complaint = await prisma.complaint.create({
+      data: {
+        ref,
+        category: parsed.data.category,
+        description: parsed.data.description,
+        priority: 'MEDIUM',
+        // No GPS pin behind this - it is a zone-level work order, not a
+        // citizen's exact location. Falls back to the zone's own centroid
+        // once drawn, and to the campus centre before that.
+        lat: zone.centroidLat ?? env.campusCenterLat,
+        lng: zone.centroidLng ?? env.campusCenterLng,
+        zoneId: zone.id,
+        zoneResolvedBy: 'SUPERVISOR_ASSIGNED',
+        reporterId: req.user.id,
+        reporterRole: 'WORKER_SUPERVISOR',
+        status: 'SUBMITTED',
+      },
+    });
+
+    await prisma.statusLog.create({
+      data: {
+        complaintId: complaint.id,
+        toStatus: 'SUBMITTED',
+        actorId: req.user.id,
+        note: `Work order created by ${req.user.name} for ${zone.name}`,
+      },
+    });
+
+    const routed = await routeToZoneOfficer(complaint, { actor: req.user });
+
+    // routeToZoneOfficer escalates instead of routing when the zone has no
+    // officer - the message must say that plainly rather than claim a
+    // hand-off that did not happen.
+    let message =
+      routed.status === 'ESCALATED'
+        ? `${zone.name} has no officer assigned, so this has been escalated.`
+        : `Work order created and routed to the ${zone.name} officer.`;
+
+    if (parsed.data.workerUserId) {
+      // The work order itself is already saved by this point - if the
+      // chosen worker cannot be allotted (busy, no longer verified, ...)
+      // that must not read as if the whole request failed. It is real and
+      // waiting in the unallotted queue either way.
+      try {
+        await allotWorker({
+          complaint: { ...routed, zoneName: zone.name },
+          workerUserId: parsed.data.workerUserId,
+          actor: req.user,
+          instructions: parsed.data.instructions,
+          durationHours: parsed.data.durationHours,
+        });
+        message = 'Work order created and allotted.';
+      } catch (err) {
+        message = `Work order created, but could not allot that worker: ${
+          err.message ?? 'unknown error'
+        }. It is waiting to be allotted.`;
+      }
+    }
+
+    const full = await loadComplaintForResponse(prisma, complaint.id);
+    res.status(201).json({ complaint: serializeComplaint(full), message });
+  }),
+);
+
 /** GET /api/admin/complaints/pending - the verification queue. */
 router.get(
   '/complaints/pending',
+  staffOrAdmin,
   asyncHandler(async (_req, res) => {
     const complaints = await prisma.complaint.findMany({
       where: { status: 'UNDER_REVIEW' },
@@ -318,6 +533,7 @@ router.get(
  */
 router.post(
   '/complaints/:id/review',
+  staffOrAdmin,
   asyncHandler(async (req, res) => {
     const schema = z.object({
       approve: z.coerce.boolean(),
@@ -422,6 +638,7 @@ router.post(
 /** GET /api/admin/complaints - everything, filterable. */
 router.get(
   '/complaints',
+  staffOrAdmin,
   asyncHandler(async (req, res) => {
     const { status, zoneCode, category } = req.query;
 
@@ -448,6 +665,7 @@ router.get(
 /** GET /api/admin/escalations - everything that fell through a crack. */
 router.get(
   '/escalations',
+  staffOrAdmin,
   asyncHandler(async (_req, res) => {
     const complaints = await prisma.complaint.findMany({
       where: { status: 'ESCALATED' },
@@ -464,6 +682,7 @@ router.get(
  */
 router.post(
   '/complaints/:id/force-allot',
+  staffOrAdmin,
   asyncHandler(async (req, res) => {
     const schema = z.object({
       workerUserId: z.string().min(1),
@@ -500,29 +719,9 @@ router.post(
  */
 router.get(
   '/free-workers',
+  staffOrAdmin,
   asyncHandler(async (_req, res) => {
-    const zones = await prisma.zone.findMany({ orderBy: { code: 'asc' } });
-
-    const result = [];
-    for (const z of zones) {
-      const [free, openComplaintCount] = await Promise.all([
-        findFreeWorkers(z.id),
-        prisma.complaint.count({
-          where: { zoneId: z.id, status: { notIn: ['CLOSED', 'AUTO_CLOSED', 'REJECTED_INVALID'] } },
-        }),
-      ]);
-      result.push({
-        zone: { code: z.code, name: z.name, label: z.label },
-        openComplaintCount,
-        workers: free.map((w) => ({
-          userId: w.userId,
-          name: w.user.name,
-          tasksCompletedToday: w.tasksCompletedToday,
-        })),
-      });
-    }
-
-    res.json({ zones: result });
+    res.json({ zones: await findAllFreeWorkersCampusWide() });
   }),
 );
 
@@ -533,6 +732,7 @@ router.get(
  */
 router.get(
   '/multi-zone-workers',
+  staffOrAdmin,
   asyncHandler(async (_req, res) => {
     const complaints = await prisma.complaint.findMany({
       where: { isCrossZone: true, status: { in: ['ALLOTTED_TO_WORKER', 'IN_PROGRESS'] } },
@@ -558,6 +758,89 @@ router.get(
         allottedAt: c.allottedWorkerAt,
       })),
     });
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// Worker Supervisor accounts
+//
+// Unlike Worker/Officer, there is no self-registration or approval queue:
+// the Admin creates the account directly and it is usable immediately.
+// ---------------------------------------------------------------------------
+
+/** GET /api/admin/supervisors - existing Worker Supervisor accounts. */
+router.get(
+  '/supervisors',
+  requireRole('ADMIN'),
+  asyncHandler(async (_req, res) => {
+    const supervisors = await prisma.user.findMany({
+      where: { role: 'WORKER_SUPERVISOR' },
+      select: { id: true, name: true, email: true, phone: true, isActive: true, createdAt: true },
+      orderBy: { name: 'asc' },
+    });
+    res.json({ supervisors });
+  }),
+);
+
+/** POST /api/admin/supervisors  { name, email, phone?, password } */
+router.post(
+  '/supervisors',
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
+    const schema = z.object({
+      name: z.string().min(2, 'Name is too short'),
+      email: z.string().trim().toLowerCase().pipe(z.string().email()),
+      phone: z.string().min(10).max(15).optional(),
+      password: z.string().min(6, 'Password must be at least 6 characters'),
+    });
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) {
+      throw new ApiError(400, 'Invalid details', parsed.error.flatten().fieldErrors);
+    }
+    const { name, email, phone, password } = parsed.data;
+
+    const existing = await prisma.user.findFirst({
+      where: { OR: [{ email: { equals: email, mode: 'insensitive' } }, ...(phone ? [{ phone }] : [])] },
+    });
+    if (existing) throw new ApiError(409, 'An account with that email or phone already exists');
+
+    const passwordHash = await bcrypt.hash(password, 10);
+    const supervisor = await prisma.user.create({
+      data: { name, email, phone, passwordHash, role: 'WORKER_SUPERVISOR' },
+    });
+
+    await logAudit({
+      actor: req.user,
+      action: 'SUPERVISOR_CREATED',
+      targetType: 'USER',
+      targetId: supervisor.id,
+      targetLabel: supervisor.name,
+    });
+
+    res.status(201).json({
+      supervisor: { id: supervisor.id, name: supervisor.name, email: supervisor.email },
+      message: `${supervisor.name} can now sign in as a Worker Supervisor.`,
+    });
+  }),
+);
+
+/**
+ * GET /api/admin/audit-log
+ * Who Admin verified, created, or appointed to run a zone or hostel, most
+ * recent first. Admin-only - this is the accountability trail for the
+ * personnel decisions the role itself is responsible for, not something
+ * Worker Supervisor needs for its own day-to-day complaint work.
+ */
+router.get(
+  '/audit-log',
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
+    const take = Math.min(Number(req.query.take ?? 100), 300);
+    const entries = await prisma.auditLog.findMany({
+      orderBy: { createdAt: 'desc' },
+      take,
+    });
+    res.json({ entries });
   }),
 );
 

@@ -42,6 +42,7 @@ export const complaintInclude = {
   reporter: { select: { id: true, name: true, phone: true, role: true } },
   assignedOfficer: { select: { id: true, name: true, phone: true } },
   assignedWorker: { select: { id: true, name: true, phone: true } },
+  assignedWarden: { select: { id: true, name: true, phone: true } },
   media: true,
 };
 
@@ -91,6 +92,7 @@ export function serializeComplaint(c, opts = {}) {
     status: c.status,
     priority: c.priority,
     isEmergency: c.isEmergency ?? false,
+    isHostelComplaint: c.isHostelComplaint ?? false,
 
     location: {
       lat: c.lat,
@@ -119,7 +121,9 @@ export function serializeComplaint(c, opts = {}) {
     /// admin screen flags these so a human decides before it reaches an officer.
     isBoundaryCase:
       c.zoneResolvedBy != null &&
-      !['POLYGON', 'RESIDENT_OVERRIDE', 'ADMIN_OVERRIDE'].includes(c.zoneResolvedBy),
+      !['POLYGON', 'RESIDENT_OVERRIDE', 'ADMIN_OVERRIDE', 'SUPERVISOR_ASSIGNED'].includes(
+        c.zoneResolvedBy,
+      ),
 
     // Who filed it, and which community they filed into. Staff see the role
     // so they can tell a student report from a resident one; peers see it
@@ -132,6 +136,7 @@ export function serializeComplaint(c, opts = {}) {
     reporterRole: c.reporterRole,
     officer: c.assignedOfficer,
     worker: c.assignedWorker,
+    warden: c.assignedWarden,
 
     isCrossZone: c.isCrossZone,
     lendingZone: c.lendingZone,

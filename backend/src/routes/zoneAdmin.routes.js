@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
 import { ApiError, asyncHandler } from '../middleware/error.js';
@@ -13,6 +14,7 @@ import {
   voronoiCells,
 } from '../utils/geo.js';
 import { notify } from '../services/workflow.js';
+import { logAudit } from '../services/audit.js';
 
 const router = Router();
 
@@ -278,6 +280,20 @@ router.put(
       });
     }
 
+    if (parsed.data.officerId !== undefined) {
+      const newOfficer = data.officerId
+        ? await prisma.user.findUnique({ where: { id: data.officerId }, select: { name: true } })
+        : null;
+      await logAudit({
+        actor: req.user,
+        action: 'OFFICER_REASSIGNED',
+        targetType: 'ZONE',
+        targetId: updated.id,
+        targetLabel: updated.name,
+        note: newOfficer ? `Now run by ${newOfficer.name}` : 'Officer cleared',
+      });
+    }
+
     const fresh = await prisma.zone.findUnique({
       where: { code },
       include: { officer: { select: { id: true, name: true, email: true } } },
@@ -478,6 +494,68 @@ router.get(
         currentZone: o.zoneOwned,
         available: o.zoneOwned == null,
       })),
+    });
+  }),
+);
+
+/**
+ * POST /api/admin/zones/officers  { name, email, phone?, password, zoneCode }
+ *
+ * Zone officers are fixed faculty appointments, not self-registered: the
+ * Admin creates the account and assigns the zone in one step, the same way
+ * Worker Supervisor and Warden accounts are created. Skips the
+ * PENDING/application dance entirely - the officer can open their queue the
+ * moment this returns.
+ */
+router.post(
+  '/officers',
+  asyncHandler(async (req, res) => {
+    const schema = z.object({
+      name: z.string().min(2, 'Name is too short'),
+      email: z.string().trim().toLowerCase().pipe(z.string().email()),
+      phone: z.string().min(10).max(15).optional(),
+      password: z.string().min(6, 'Password must be at least 6 characters'),
+      zoneCode: z.coerce.number().int().min(1).max(8),
+    });
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) {
+      throw new ApiError(400, 'Invalid details', parsed.error.flatten().fieldErrors);
+    }
+    const { name, email, phone, password, zoneCode } = parsed.data;
+
+    const zone = await prisma.zone.findUnique({ where: { code: zoneCode } });
+    if (!zone) throw new ApiError(404, `Zone ${zoneCode} not found`);
+    if (zone.officerId) {
+      throw new ApiError(409, `${zone.name} already has an officer. Reassign it first.`);
+    }
+
+    const existing = await prisma.user.findFirst({
+      where: { OR: [{ email: { equals: email, mode: 'insensitive' } }, ...(phone ? [{ phone }] : [])] },
+    });
+    if (existing) throw new ApiError(409, 'An account with that email or phone already exists');
+
+    const passwordHash = await bcrypt.hash(password, 10);
+
+    const officer = await prisma.$transaction(async (tx) => {
+      const user = await tx.user.create({
+        data: { name, email, phone, passwordHash, role: 'OFFICER' },
+      });
+      await tx.zone.update({ where: { id: zone.id }, data: { officerId: user.id } });
+      return user;
+    });
+
+    await logAudit({
+      actor: req.user,
+      action: 'OFFICER_CREATED',
+      targetType: 'USER',
+      targetId: officer.id,
+      targetLabel: officer.name,
+      note: `Appointed to ${zone.name}`,
+    });
+
+    res.status(201).json({
+      officer: { id: officer.id, name: officer.name, email: officer.email },
+      message: `${officer.name} now runs ${zone.name}.`,
     });
   }),
 );

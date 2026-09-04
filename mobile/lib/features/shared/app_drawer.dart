@@ -71,10 +71,13 @@ class AppDrawer extends StatelessWidget {
       Role.worker => 'Cleaning worker',
       Role.officer => 'Zone officer',
       Role.admin => 'Campus admin',
+      Role.workerSupervisor => 'Worker supervisor',
+      Role.warden => 'Warden',
       Role.unknown => 'Unknown',
     };
 
     final zone = user.zone ?? user.worker?.zone;
+    final hostel = user.hostel;
 
     return Drawer(
       child: SafeArea(
@@ -145,6 +148,25 @@ class AppDrawer extends StatelessWidget {
                           ),
                           child: Text(
                             zone.name.toUpperCase(),
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 9.5,
+                              letterSpacing: 1.1,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                      ],
+                      if (hostel != null) ...[
+                        const SizedBox(width: 7),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.22),
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Text(
+                            hostel.name.toUpperCase(),
                             style: const TextStyle(
                               color: Colors.white,
                               fontSize: 9.5,

@@ -46,6 +46,35 @@ export async function findFreeWorkers(zoneId, tx = null) {
   });
 }
 
+/**
+ * Every free worker on campus, grouped by zone. Shared by the Admin's
+ * campus-wide screen and the hostel-complaint allotment screen, so there is
+ * exactly one place that answers "who is free right now, anywhere".
+ */
+export async function findAllFreeWorkersCampusWide() {
+  const zones = await prisma.zone.findMany({ orderBy: { code: 'asc' } });
+
+  const result = [];
+  for (const z of zones) {
+    const [free, openComplaintCount] = await Promise.all([
+      findFreeWorkers(z.id),
+      prisma.complaint.count({
+        where: { zoneId: z.id, status: { notIn: ['CLOSED', 'AUTO_CLOSED', 'REJECTED_INVALID'] } },
+      }),
+    ]);
+    result.push({
+      zone: { code: z.code, name: z.name, label: z.label },
+      openComplaintCount,
+      workers: free.map((w) => ({
+        userId: w.userId,
+        name: w.user.name,
+        tasksCompletedToday: w.tasksCompletedToday,
+      })),
+    });
+  }
+  return result;
+}
+
 /** Every worker in a zone with their live state - powers the officer roster. */
 export async function getZoneRoster(zoneId, tx = null) {
   const db = tx ?? prisma;
@@ -202,6 +231,73 @@ export async function broadcastEmergency(complaint, { actor = null } = {}) {
       total: officers.length + onDutyWorkers.length + admins.length + residents.length,
     },
   };
+}
+
+/**
+ * Hostel route: skip the officer entirely and tell Admin, the hostel's
+ * Warden, and every Worker Supervisor at once.
+ *
+ * A normal complaint waits for an admin (or the zone officer) to verify it
+ * before anyone is allotted. A hostel complaint does not go through that
+ * gate or through a zone officer at all - the hostel's own staff own it from
+ * the moment it is filed, mirroring how an emergency skips the same gate to
+ * reach a zone officer faster.
+ */
+export async function broadcastHostelComplaint(complaint, { actor = null } = {}) {
+  const landmark = await prisma.landmark.findUnique({
+    where: { id: complaint.landmarkId },
+    include: { warden: true },
+  });
+
+  if (!landmark?.wardenId) {
+    // No warden posted to this hostel - park it with the Admin rather than
+    // letting the complaint fall down a hole, same as an unstaffed zone.
+    return transition({
+      complaintId: complaint.id,
+      toStatus: 'ESCALATED',
+      isSystem: true,
+      note: `No warden assigned to ${landmark?.name ?? 'this hostel'}`,
+      data: { escalationReason: 'NO_WARDEN_ASSIGNED' },
+      force: true,
+    });
+  }
+
+  const updated = await transition({
+    complaintId: complaint.id,
+    toStatus: 'ALLOTTED_TO_HOSTEL_STAFF',
+    actor,
+    isSystem: true,
+    note: `Hostel complaint - forwarded to ${landmark.name}'s warden, Admin and every Worker Supervisor`,
+    data: { assignedWardenId: landmark.wardenId },
+  });
+
+  const [supervisors, admins] = await Promise.all([
+    prisma.user.findMany({ where: { role: 'WORKER_SUPERVISOR', isActive: true }, select: { id: true } }),
+    prisma.user.findMany({ where: { role: 'ADMIN' }, select: { id: true } }),
+  ]);
+
+  await notifyMany([
+    {
+      userId: landmark.wardenId,
+      complaintId: complaint.id,
+      title: `New hostel complaint - ${landmark.name}`,
+      body: `${complaint.ref} needs a worker.`,
+    },
+    ...supervisors.map((s) => ({
+      userId: s.id,
+      complaintId: complaint.id,
+      title: `New hostel complaint - ${landmark.name}`,
+      body: `${complaint.ref} is awaiting allotment.`,
+    })),
+    ...admins.map((a) => ({
+      userId: a.id,
+      complaintId: complaint.id,
+      title: `New hostel complaint - ${landmark.name}`,
+      body: `${complaint.ref} skipped the officer queue and went straight to the warden.`,
+    })),
+  ]);
+
+  return updated;
 }
 
 /**

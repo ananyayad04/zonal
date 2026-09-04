@@ -5,6 +5,7 @@ import '../../core/api_client.dart';
 import '../../core/palette.dart';
 import '../../shared/authed_image.dart';
 import '../../shared/ui.dart';
+import 'create_officer_screen.dart';
 
 /// The onboarding gate for the two roles that self-register and wait.
 ///
@@ -70,6 +71,13 @@ class _VerifyPeopleScreenState extends State<VerifyPeopleScreen>
     await _future;
   }
 
+  Future<void> _addOfficer() async {
+    final created = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(builder: (_) => const CreateOfficerScreen()),
+    );
+    if (created == true) await _refresh();
+  }
+
   /// Workers decided in this session. Removed from the list the moment the
   /// server confirms, rather than waiting for the refetch - a card that stays
   /// put after you act on it reads as "the button did nothing".
@@ -112,6 +120,15 @@ class _VerifyPeopleScreenState extends State<VerifyPeopleScreen>
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.officers ? 'Zone officers' : 'Workers'),
+        actions: widget.officers
+            ? [
+                IconButton(
+                  tooltip: 'New zone officer',
+                  icon: const Icon(Icons.person_add_alt),
+                  onPressed: _addOfficer,
+                ),
+              ]
+            : null,
         bottom: TabBar(
           controller: _tabs,
           indicatorColor: Colors.white,
@@ -199,7 +216,8 @@ class _VerifyPeopleScreenState extends State<VerifyPeopleScreen>
                             },
                       subtitle: _zoneFilter == null && _index == 0
                           ? (widget.officers
-                              ? 'Officer applications appear here for you to check.'
+                              ? 'Zone officers are appointed directly - tap + above '
+                                  'to create one.'
                               : 'New worker registrations appear here for you to check.')
                           : null,
                     ),

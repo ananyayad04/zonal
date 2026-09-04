@@ -20,6 +20,8 @@ import { officerRouter } from './routes/officer.routes.js';
 import { workerRouter } from './routes/worker.routes.js';
 import { adminRouter } from './routes/admin.routes.js';
 import { zoneAdminRouter } from './routes/zoneAdmin.routes.js';
+import { hostelAdminRouter } from './routes/hostelAdmin.routes.js';
+import { hostelRouter } from './routes/hostel.routes.js';
 import { analyticsRouter } from './routes/analytics.routes.js';
 import { notificationRouter } from './routes/notification.routes.js';
 
@@ -180,9 +182,12 @@ app.use('/api/landmarks', landmarkRouter);
 app.use('/api/complaints', complaintRouter);
 app.use('/api/officer', officerRouter);
 app.use('/api/worker', workerRouter);
-// Mounted before the general admin router so /api/admin/zones/* wins.
+// Mounted before the general admin router so /api/admin/zones/* and
+// /api/admin/hostels/* win.
 app.use('/api/admin/zones', zoneAdminRouter);
+app.use('/api/admin/hostels', hostelAdminRouter);
 app.use('/api/admin', adminRouter);
+app.use('/api/hostel', hostelRouter);
 app.use('/api/analytics', analyticsRouter);
 app.use('/api/notifications', notificationRouter);
 

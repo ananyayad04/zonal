@@ -6,9 +6,14 @@ import '../../core/models.dart';
 import '../../core/palette.dart';
 import '../../core/session.dart';
 import '../../core/theme.dart';
+import '../../shared/allotment_details_sheet.dart';
 import '../../shared/authed_image.dart';
+import '../../shared/pick_any_worker_sheet.dart';
 import '../../shared/ui.dart';
+import '../officer/allot_sheet.dart';
 import '../resident/satisfaction_sheet.dart';
+import '../warden/warden_approval_sheet.dart';
+import '../worker/complete_task_screen.dart';
 
 /// Full history of one complaint. Shared by all four roles - what differs is
 /// only which actions appear at the bottom.
@@ -60,8 +65,13 @@ class _ComplaintDetailScreenState extends State<ComplaintDetailScreen> {
           onRetry: _refresh,
           builder: (detail) {
             final c = detail.complaint;
-            final canConfirm =
-                session.role == Role.resident && c.status == 'WORK_DONE';
+            // Reporter roles only, only the person who actually filed it (not
+            // a peer viewing it in the community feed), and never for a
+            // hostel complaint - the warden confirms those, not the reporter.
+            final canConfirm = reporterRoles.contains(session.role) &&
+                c.status == 'WORK_DONE' &&
+                !c.isHostelComplaint &&
+                c.reporter?.id == session.user?.id;
 
             return RefreshIndicator(
               onRefresh: _refresh,
@@ -78,6 +88,13 @@ class _ComplaintDetailScreenState extends State<ComplaintDetailScreen> {
                         onDone: _refresh,
                       ),
                     ),
+
+                  _StaffActionSection(
+                    complaint: c,
+                    role: session.role,
+                    userId: session.user?.id,
+                    onDone: _refresh,
+                  ),
 
                   if (c.status == 'REJECTED_INVALID' && c.rejectionReason != null)
                     InfoBanner(
@@ -465,6 +482,8 @@ class _PeopleSection extends StatelessWidget {
         ('Reported by', complaint.reporter!.name, Icons.person_outline),
       if (complaint.officer != null)
         ('Zone officer', complaint.officer!.name, Icons.badge_outlined),
+      if (complaint.warden != null)
+        ('Warden', complaint.warden!.name, Icons.apartment_outlined),
       if (complaint.worker != null)
         ('Worker', complaint.worker!.name, Icons.cleaning_services_outlined),
     ];
@@ -605,6 +624,512 @@ class _TimelineSection extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+/// Statuses where a free worker still needs to be found - shared by every
+/// staff role's allotment check below.
+const _needsZoneAllotment = {'ALLOTTED_TO_OFFICER', 'HELP_REQUESTED', 'ESCALATED', 'REOPENED'};
+const _needsHostelAllotment = {'ALLOTTED_TO_HOSTEL_STAFF', 'ESCALATED', 'REOPENED'};
+
+/// Dispatches to the one action block that matters for whoever is looking at
+/// this complaint. A notification takes every role straight to this same
+/// screen, so this is what turns that landing into something they can
+/// actually act on, instead of a read-only page they have to back out of.
+class _StaffActionSection extends StatelessWidget {
+  final Complaint complaint;
+  final Role role;
+  final String? userId;
+  final Future<void> Function() onDone;
+
+  const _StaffActionSection({
+    required this.complaint,
+    required this.role,
+    required this.userId,
+    required this.onDone,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final child = switch (role) {
+      Role.worker =>
+        complaint.worker?.id == userId ? _WorkerActionCard(complaint: complaint, onDone: onDone) : null,
+      Role.officer => _OfficerActionCard(complaint: complaint, userId: userId, onDone: onDone),
+      Role.admin || Role.workerSupervisor =>
+        _StaffAllotActionCard(complaint: complaint, onDone: onDone),
+      Role.warden =>
+        complaint.warden?.id == userId ? _WardenActionCard(complaint: complaint, onDone: onDone) : null,
+      _ => null,
+    };
+
+    if (child == null) return const SizedBox.shrink();
+    return Padding(padding: const EdgeInsets.fromLTRB(12, 4, 12, 0), child: child);
+  }
+}
+
+/// A note, not a button - for a stage the viewer cannot act on right now but
+/// should understand why.
+class _WaitingNote extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  final String text;
+
+  const _WaitingNote({required this.icon, required this.color, required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(11),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, size: 17, color: color),
+          const SizedBox(width: 9),
+          Expanded(child: Text(text, style: TextStyle(fontSize: 12.5, color: color))),
+        ],
+      ),
+    );
+  }
+}
+
+/// A reason dialog reused by every role that can reject a complaint at
+/// verification - officer, admin and supervisor all ask the same question.
+Future<String?> _askRejectReason(BuildContext context) {
+  final controller = TextEditingController();
+  return showDialog<String>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('Reject this complaint'),
+      content: TextField(
+        controller: controller,
+        autofocus: true,
+        maxLines: 2,
+        textCapitalization: TextCapitalization.sentences,
+        decoration: const InputDecoration(hintText: 'Why is it being rejected?'),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cancel')),
+        FilledButton(
+          style: FilledButton.styleFrom(backgroundColor: Palette.critical),
+          onPressed: () => Navigator.of(ctx).pop(
+            controller.text.trim().isEmpty ? 'Not a cleanliness issue' : controller.text.trim(),
+          ),
+          child: const Text('Reject'),
+        ),
+      ],
+    ),
+  );
+}
+
+/// Worker: start the task, or go finish it with proof of work. Complete stays
+/// its own screen rather than being inlined here - it needs the camera.
+class _WorkerActionCard extends StatefulWidget {
+  final Complaint complaint;
+  final Future<void> Function() onDone;
+
+  const _WorkerActionCard({required this.complaint, required this.onDone});
+
+  @override
+  State<_WorkerActionCard> createState() => _WorkerActionCardState();
+}
+
+class _WorkerActionCardState extends State<_WorkerActionCard> {
+  bool _busy = false;
+
+  Future<void> _start() async {
+    setState(() => _busy = true);
+    try {
+      await context.read<ApiClient>().post('/worker/tasks/${widget.complaint.id}/start');
+      if (mounted) {
+        showSnack(context, 'Task started');
+        await widget.onDone();
+      }
+    } on ApiException catch (e) {
+      if (mounted) showSnack(context, e.message, error: true);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _complete() async {
+    final done = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(builder: (_) => CompleteTaskScreen(complaint: widget.complaint)),
+    );
+    if (done == true) await widget.onDone();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return switch (widget.complaint.status) {
+      'ALLOTTED_TO_WORKER' || 'REOPENED' => FilledButton.icon(
+          style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(46)),
+          onPressed: _busy ? null : _start,
+          icon: const Icon(Icons.play_arrow, size: 19),
+          label: Text(widget.complaint.status == 'REOPENED' ? 'Start rework' : 'Start work'),
+        ),
+      'IN_PROGRESS' => FilledButton.icon(
+          style: FilledButton.styleFrom(
+            backgroundColor: Palette.good,
+            minimumSize: const Size.fromHeight(46),
+          ),
+          onPressed: _complete,
+          icon: const Icon(Icons.camera_alt_outlined, size: 19),
+          label: const Text('Mark done + photo'),
+        ),
+      'WORK_DONE' => const _WaitingNote(
+          icon: Icons.hourglass_top,
+          color: Palette.warning,
+          text: 'Waiting for the reporter to confirm',
+        ),
+      _ => const SizedBox.shrink(),
+    };
+  }
+}
+
+/// Officer: verify a complaint in their own zone, or allot a worker to one
+/// they already own (or any emergency, regardless of zone).
+class _OfficerActionCard extends StatefulWidget {
+  final Complaint complaint;
+  final String? userId;
+  final Future<void> Function() onDone;
+
+  const _OfficerActionCard({required this.complaint, required this.userId, required this.onDone});
+
+  @override
+  State<_OfficerActionCard> createState() => _OfficerActionCardState();
+}
+
+class _OfficerActionCardState extends State<_OfficerActionCard> {
+  bool _busy = false;
+
+  Future<void> _review(bool approve) async {
+    String? reason;
+    if (!approve) {
+      reason = await _askRejectReason(context);
+      if (reason == null) return;
+    }
+    if (!mounted) return;
+
+    setState(() => _busy = true);
+    try {
+      final res = await context.read<ApiClient>().post(
+        '/officer/complaints/${widget.complaint.id}/review',
+        {'approve': approve, if (reason != null) 'reason': reason},
+      );
+      if (mounted) {
+        showSnack(context, res['message'] as String? ?? (approve ? 'Verified' : 'Rejected'));
+        await widget.onDone();
+      }
+    } on ApiException catch (e) {
+      if (mounted) showSnack(context, e.message, error: true);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _allot() async {
+    final done = await AllotSheet.show(context, complaint: widget.complaint);
+    if (done == true) await widget.onDone();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = widget.complaint;
+    if (c.isHostelComplaint) return const SizedBox.shrink();
+
+    final ownsIt = c.officer?.id == widget.userId;
+
+    if (c.status == 'UNDER_REVIEW') {
+      return Row(
+        children: [
+          Expanded(
+            child: FilledButton.icon(
+              style: FilledButton.styleFrom(
+                backgroundColor: Palette.good,
+                minimumSize: const Size.fromHeight(46),
+              ),
+              onPressed: _busy ? null : () => _review(true),
+              icon: const Icon(Icons.check, size: 18),
+              label: const Text('Verify'),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: OutlinedButton.icon(
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Palette.critical,
+                side: const BorderSide(color: Palette.critical),
+                minimumSize: const Size.fromHeight(46),
+              ),
+              onPressed: _busy ? null : () => _review(false),
+              icon: const Icon(Icons.close, size: 18),
+              label: const Text('Reject'),
+            ),
+          ),
+        ],
+      );
+    }
+
+    if (c.status == 'HELP_REQUESTED') {
+      return const _WaitingNote(
+        icon: Icons.hourglass_top,
+        color: Color(0xFF7A52CC),
+        text: 'Waiting for a nearby zone to lend a worker',
+      );
+    }
+
+    if (_needsZoneAllotment.contains(c.status) && (ownsIt || c.isEmergency)) {
+      return FilledButton.icon(
+        style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(46)),
+        onPressed: _allot,
+        icon: const Icon(Icons.person_add_alt, size: 19),
+        label: const Text('Allot a worker'),
+      );
+    }
+
+    return const SizedBox.shrink();
+  }
+}
+
+/// Admin and Worker Supervisor share the same reach: verify, and allot any
+/// free worker campus-wide - routed to the hostel endpoint automatically
+/// when the complaint is a hostel one.
+class _StaffAllotActionCard extends StatefulWidget {
+  final Complaint complaint;
+  final Future<void> Function() onDone;
+
+  const _StaffAllotActionCard({required this.complaint, required this.onDone});
+
+  @override
+  State<_StaffAllotActionCard> createState() => _StaffAllotActionCardState();
+}
+
+class _StaffAllotActionCardState extends State<_StaffAllotActionCard> {
+  bool _busy = false;
+
+  Future<void> _review(bool approve) async {
+    String? reason;
+    if (!approve) {
+      reason = await _askRejectReason(context);
+      if (reason == null) return;
+    }
+    if (!mounted) return;
+
+    setState(() => _busy = true);
+    try {
+      final res = await context.read<ApiClient>().post(
+        '/admin/complaints/${widget.complaint.id}/review',
+        {'approve': approve, if (reason != null) 'reason': reason},
+      );
+      if (mounted) {
+        showSnack(context, res['message'] as String? ?? (approve ? 'Verified' : 'Rejected'));
+        await widget.onDone();
+      }
+    } on ApiException catch (e) {
+      if (mounted) showSnack(context, e.message, error: true);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _allot() async {
+    final hostel = widget.complaint.isHostelComplaint;
+    try {
+      final res = await context.read<ApiClient>().get(hostel ? '/hostel/free-workers' : '/admin/free-workers');
+      final options = flattenFreeWorkers((res['zones'] as List).cast<Map<String, dynamic>>());
+
+      if (!mounted) return;
+      if (options.isEmpty) {
+        showSnack(context, 'No worker is free anywhere on campus', error: true);
+        return;
+      }
+
+      final chosen = await PickAnyWorkerSheet.show(context, options);
+      if (chosen == null || !mounted) return;
+
+      final details = await AllotmentDetailsSheet.show(context);
+      if (details == null || !mounted) return;
+
+      final path = hostel
+          ? '/hostel/complaints/${widget.complaint.id}/allot'
+          : '/admin/complaints/${widget.complaint.id}/force-allot';
+      final result = await context.read<ApiClient>().post(path, {
+        'workerUserId': chosen,
+        if (details.instructions != null) 'instructions': details.instructions,
+        if (details.durationHours != null) 'durationHours': details.durationHours,
+      });
+
+      if (mounted) {
+        showSnack(context, result['message'] as String? ?? 'Allotted');
+        await widget.onDone();
+      }
+    } on ApiException catch (e) {
+      if (mounted) showSnack(context, e.message, error: true);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = widget.complaint;
+
+    if (c.status == 'UNDER_REVIEW' && !c.isHostelComplaint) {
+      return Row(
+        children: [
+          Expanded(
+            child: FilledButton.icon(
+              style: FilledButton.styleFrom(
+                backgroundColor: Palette.good,
+                minimumSize: const Size.fromHeight(46),
+              ),
+              onPressed: _busy ? null : () => _review(true),
+              icon: const Icon(Icons.check, size: 18),
+              label: const Text('Verify'),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: OutlinedButton.icon(
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Palette.critical,
+                side: const BorderSide(color: Palette.critical),
+                minimumSize: const Size.fromHeight(46),
+              ),
+              onPressed: _busy ? null : () => _review(false),
+              icon: const Icon(Icons.close, size: 18),
+              label: const Text('Reject'),
+            ),
+          ),
+        ],
+      );
+    }
+
+    final needsAllotment = c.isHostelComplaint
+        ? _needsHostelAllotment.contains(c.status)
+        : _needsZoneAllotment.contains(c.status);
+
+    if (needsAllotment) {
+      return FilledButton.icon(
+        style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(46)),
+        onPressed: _allot,
+        icon: const Icon(Icons.person_add_alt, size: 19),
+        label: const Text('Allot any worker on campus'),
+      );
+    }
+
+    if (c.status == 'WORK_DONE' && c.isHostelComplaint) {
+      return const _WaitingNote(
+        icon: Icons.hourglass_top,
+        color: Palette.warning,
+        text: "Waiting for the hostel's warden to approve",
+      );
+    }
+
+    return const SizedBox.shrink();
+  }
+}
+
+/// Warden: allot a free worker to their own hostel's complaint, or approve /
+/// send back the finished work - the reporting student does not get this
+/// step for a hostel complaint, the warden's decision alone closes it.
+class _WardenActionCard extends StatefulWidget {
+  final Complaint complaint;
+  final Future<void> Function() onDone;
+
+  const _WardenActionCard({required this.complaint, required this.onDone});
+
+  @override
+  State<_WardenActionCard> createState() => _WardenActionCardState();
+}
+
+class _WardenActionCardState extends State<_WardenActionCard> {
+  Future<void> _allot() async {
+    try {
+      final res = await context.read<ApiClient>().get('/hostel/free-workers');
+      final options = flattenFreeWorkers((res['zones'] as List).cast<Map<String, dynamic>>());
+
+      if (!mounted) return;
+      if (options.isEmpty) {
+        showSnack(context, 'No worker is free anywhere on campus', error: true);
+        return;
+      }
+
+      final chosen = await PickAnyWorkerSheet.show(context, options);
+      if (chosen == null || !mounted) return;
+
+      final details = await AllotmentDetailsSheet.show(context);
+      if (details == null || !mounted) return;
+
+      final result = await context.read<ApiClient>().post(
+        '/hostel/complaints/${widget.complaint.id}/allot',
+        {
+          'workerUserId': chosen,
+          if (details.instructions != null) 'instructions': details.instructions,
+          if (details.durationHours != null) 'durationHours': details.durationHours,
+        },
+      );
+
+      if (mounted) {
+        showSnack(context, result['message'] as String? ?? 'Allotted');
+        await widget.onDone();
+      }
+    } on ApiException catch (e) {
+      if (mounted) showSnack(context, e.message, error: true);
+    }
+  }
+
+  Future<void> _decide(bool satisfied) async {
+    final done = await WardenApprovalSheet.show(context, complaint: widget.complaint, satisfied: satisfied);
+    if (done == true) await widget.onDone();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = widget.complaint;
+
+    if (_needsHostelAllotment.contains(c.status)) {
+      return FilledButton.icon(
+        style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(46)),
+        onPressed: _allot,
+        icon: const Icon(Icons.person_add_alt, size: 19),
+        label: const Text('Allot a worker'),
+      );
+    }
+
+    if (c.status == 'WORK_DONE') {
+      return Row(
+        children: [
+          Expanded(
+            child: FilledButton.icon(
+              style: FilledButton.styleFrom(
+                backgroundColor: Palette.good,
+                minimumSize: const Size.fromHeight(46),
+              ),
+              onPressed: () => _decide(true),
+              icon: const Icon(Icons.check, size: 18),
+              label: const Text('Approve'),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: OutlinedButton.icon(
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Palette.serious,
+                side: const BorderSide(color: Palette.serious),
+                minimumSize: const Size.fromHeight(46),
+              ),
+              onPressed: () => _decide(false),
+              icon: const Icon(Icons.replay, size: 18),
+              label: const Text('Send back'),
+            ),
+          ),
+        ],
+      );
+    }
+
+    return const SizedBox.shrink();
   }
 }
 

@@ -66,6 +66,11 @@ function publicUser(user) {
           colorHex: user.zoneOwned.colorHex,
         }
       : null,
+    // Warden-only: the hostel they run. Always set for a Warden - the Admin
+    // assigns it at account-creation time, there is no unassigned state.
+    hostel: user.hostelOwned
+      ? { id: user.hostelOwned.id, name: user.hostelOwned.name, category: user.hostelOwned.category }
+      : null,
   };
 }
 
@@ -89,29 +94,26 @@ const registerSchema = z.object({
   email: emailField,
   phone: z.string().min(10).max(15).optional(),
   password: z.string().min(6, 'Password must be at least 6 characters'),
-  role: z.enum(['RESIDENT', 'STUDENT', 'WORKER', 'OFFICER']).default('RESIDENT'),
-  // Workers pick the zone they will serve; officers the zone they want to run
+  // OFFICER is deliberately not self-serve here: zone officers are fixed
+  // faculty appointments, created directly by the Admin (POST
+  // /admin/zones/officers), the same way Worker Supervisor and Warden are.
+  role: z.enum(['RESIDENT', 'STUDENT', 'WORKER']).default('RESIDENT'),
+  // Workers pick the zone they will serve.
   zoneCode: z.coerce.number().int().min(1).max(8).optional(),
 });
 
 /** Roles that self-register but cannot act until an admin verifies them. */
-const VERIFIED_ROLES = new Set(['WORKER', 'OFFICER']);
+const VERIFIED_ROLES = new Set(['WORKER']);
 
 /**
  * POST /api/auth/register
  *
  * Residents and Students are usable immediately - they differ only in which
  * community feed their complaints appear in, which is no reason to make
- * someone wait. Workers and Officers are created PENDING
- * and can do nothing until the Admin verifies them - that gate lives in
- * `requireApprovedWorker` for workers, and in `requireApprovedOfficer` for
- * officers.
+ * someone wait. Workers are created PENDING and can do nothing until the
+ * Admin verifies them - that gate lives in `requireApprovedWorker`.
  *
- * An officer's zone choice is an application, not an appointment. Ownership
- * (Zone.officerId) is granted by the admin on approval, so several people may
- * apply for the same zone and the admin picks one.
- *
- * Admins are never self-registered.
+ * Admins, Officers, Worker Supervisors and Wardens are never self-registered.
  */
 router.post(
   '/register',
@@ -135,26 +137,11 @@ router.post(
 
     const needsZone = VERIFIED_ROLES.has(role);
     if (needsZone && !zoneCode) {
-      throw new ApiError(
-        400,
-        role === 'WORKER'
-          ? 'Workers must select the zone they will work in'
-          : 'Officers must select the zone they want to run',
-      );
+      throw new ApiError(400, 'Workers must select the zone they will work in');
     }
 
     const zone = needsZone ? await prisma.zone.findUnique({ where: { code: zoneCode } }) : null;
     if (needsZone && !zone) throw new ApiError(404, `Zone ${zoneCode} does not exist`);
-
-    // Applying for a zone that already has an officer would waste the
-    // applicant's time: the admin could never approve it without first
-    // removing the incumbent. Say so now rather than after a day of waiting.
-    if (role === 'OFFICER' && zone.officerId) {
-      throw new ApiError(
-        409,
-        `${zone.name} already has an officer. Choose a zone that is still open.`,
-      );
-    }
 
     const passwordHash = await bcrypt.hash(password, 10);
 
@@ -167,7 +154,7 @@ router.post(
         role,
         ...(needsZone
           ? {
-              [role === 'WORKER' ? 'workerProfile' : 'officerProfile']: {
+              workerProfile: {
                 create: {
                   zoneId: zone.id,
                   idProofUrl: req.file ? await putMedia(req.file) : null,
@@ -181,6 +168,7 @@ router.post(
         workerProfile: { include: { zone: true } },
         officerProfile: { include: { zone: true } },
         zoneOwned: true,
+        hostelOwned: true,
       },
     });
 
@@ -188,11 +176,10 @@ router.post(
     if (needsZone) {
       const admins = await prisma.user.findMany({ where: { role: 'ADMIN' }, select: { id: true } });
       if (admins.length) {
-        const what = role === 'WORKER' ? 'worker' : 'zone officer';
         await prisma.notification.createMany({
           data: admins.map((a) => ({
             userId: a.id,
-            title: `New ${what} awaiting verification`,
+            title: 'New worker awaiting verification',
             body: `${name} applied for ${zone.name} (${zone.label}).`,
           })),
         });
@@ -205,9 +192,7 @@ router.post(
       message:
         role === 'WORKER'
           ? 'Registered. An admin must verify your account before you can receive tasks.'
-          : role === 'OFFICER'
-            ? `Applied to run ${zone.name}. An admin must approve you before the zone is yours.`
-            : 'Registered successfully.',
+          : 'Registered successfully.',
     });
   }),
 );
@@ -233,6 +218,7 @@ router.post(
         workerProfile: { include: { zone: true } },
         officerProfile: { include: { zone: true } },
         zoneOwned: true,
+        hostelOwned: true,
       },
     });
 

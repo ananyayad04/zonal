@@ -50,6 +50,9 @@ class _InsightsScreenState extends State<InsightsScreen> {
             final hotspots = (data['hotspots'] as List).cast<Map<String, dynamic>>();
             final staffing = data['staffing'] as Map<String, dynamic>;
             final recurrences = (data['recurrences'] as List).cast<Map<String, dynamic>>();
+            final hostels = data['hostels'] as Map<String, dynamic>?;
+            final unassignedHostels =
+                (hostels?['unassignedHostels'] as List? ?? const []).cast<Map<String, dynamic>>();
             final structural = hotspots.where((h) => h['likelyStructural'] == true).toList();
             final busy = hotspots.where((h) => h['likelyStructural'] != true).toList();
 
@@ -86,7 +89,10 @@ class _InsightsScreenState extends State<InsightsScreen> {
                     ],
                   ),
 
-                  if (structural.isEmpty && recurrences.isEmpty && staffing['recommendation'] == null)
+                  if (structural.isEmpty &&
+                      recurrences.isEmpty &&
+                      unassignedHostels.isEmpty &&
+                      staffing['recommendation'] == null)
                     const Padding(
                       padding: EdgeInsets.only(top: 60),
                       child: EmptyState(
@@ -119,6 +125,17 @@ class _InsightsScreenState extends State<InsightsScreen> {
                   ],
 
                   // 3 -------------------------------------------------------
+                  if (unassignedHostels.isNotEmpty) ...[
+                    const SizedBox(height: 26),
+                    _Heading(
+                      'HOSTELS WITH NO WARDEN',
+                      '${unassignedHostels.length} hostel(s) cannot be allotted a '
+                          'worker for a complaint filed inside them until one is assigned',
+                    ),
+                    for (final h in unassignedHostels) _UnassignedHostelRow(hostel: h),
+                  ],
+
+                  // 4 -------------------------------------------------------
                   if (recurrences.isNotEmpty) ...[
                     const SizedBox(height: 26),
                     _Heading(
@@ -466,6 +483,50 @@ class _RecurrenceRow extends StatelessWidget {
                 fontWeight: FontWeight.w800,
                 color: Palette.warning,
               ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A hostel with nobody running it - the same shape of gap as a zone with no
+/// officer, just surfaced before a complaint ever hits it.
+class _UnassignedHostelRow extends StatelessWidget {
+  final Map<String, dynamic> hostel;
+
+  const _UnassignedHostelRow({required this.hostel});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(13),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(11),
+        border: Border.all(color: Palette.warning.withValues(alpha: 0.45)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.apartment, size: 19, color: Palette.warning),
+          const SizedBox(width: 11),
+          Expanded(
+            child: Text(
+              hostel['name'] as String? ?? '',
+              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+            ),
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+            decoration: BoxDecoration(
+              color: Palette.warning.withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(7),
+            ),
+            child: const Text(
+              'No warden',
+              style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w800, color: Palette.warning),
             ),
           ),
         ],

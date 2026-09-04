@@ -1,6 +1,15 @@
 // Data models mirroring the API payloads.
 
-enum Role { resident, student, worker, officer, admin, unknown }
+enum Role {
+  resident,
+  student,
+  worker,
+  officer,
+  admin,
+  workerSupervisor,
+  warden,
+  unknown,
+}
 
 /// Roles that file complaints and sign the work off. Identical in what they
 /// can do; separate in who sees what they file.
@@ -12,6 +21,8 @@ Role roleFrom(String? v) => switch (v) {
       'WORKER' => Role.worker,
       'OFFICER' => Role.officer,
       'ADMIN' => Role.admin,
+      'WORKER_SUPERVISOR' => Role.workerSupervisor,
+      'WARDEN' => Role.warden,
       _ => Role.unknown,
     };
 
@@ -120,6 +131,23 @@ class OfficerInfo {
       );
 }
 
+/// The hostel a Warden runs — mirrors OfficerInfo's zone, but there is no
+/// approval status: a Warden is created by the Admin with a hostel already
+/// assigned, so there is no "waiting for verification" state to represent.
+class HostelInfo {
+  final String id;
+  final String name;
+  final String category; // BOYS_HOSTEL | GIRLS_HOSTEL
+
+  const HostelInfo({required this.id, required this.name, required this.category});
+
+  factory HostelInfo.fromJson(Map<String, dynamic> j) => HostelInfo(
+        id: j['id'] as String,
+        name: j['name'] as String,
+        category: j['category'] as String,
+      );
+}
+
 class AppUser {
   final String id;
   final String name;
@@ -129,6 +157,7 @@ class AppUser {
   final WorkerInfo? worker;
   final OfficerInfo? officer;
   final Zone? zone; // the zone an officer actually holds; null until approved
+  final HostelInfo? hostel; // the hostel a warden runs; always set for a warden
 
   const AppUser({
     required this.id,
@@ -139,9 +168,12 @@ class AppUser {
     this.worker,
     this.officer,
     this.zone,
+    this.hostel,
   });
 
   /// True when this account has signed up but an admin has not cleared it yet.
+  /// Worker Supervisor and Warden are created directly by the Admin, so
+  /// neither ever has a "waiting for verification" state.
   bool get awaitingVerification =>
       (role == Role.worker && worker != null && !worker!.isApproved) ||
       (role == Role.officer && officer != null && !officer!.isApproved);
@@ -159,6 +191,9 @@ class AppUser {
             ? OfficerInfo.fromJson(j['officer'] as Map<String, dynamic>)
             : null,
         zone: j['zone'] != null ? Zone.fromJson(j['zone'] as Map<String, dynamic>) : null,
+        hostel: j['hostel'] != null
+            ? HostelInfo.fromJson(j['hostel'] as Map<String, dynamic>)
+            : null,
       );
 }
 
@@ -248,6 +283,11 @@ class Complaint {
   /// officer and on-duty worker at once.
   final bool isEmergency;
 
+  /// From inside a hostel - skips the officer queue and goes straight to
+  /// Admin, that hostel's Warden, and every Worker Supervisor. Only the
+  /// Warden approves the finished work for this kind of complaint.
+  final bool isHostelComplaint;
+
   final double lat;
   final double lng;
 
@@ -274,6 +314,7 @@ class Complaint {
   final PersonRef? reporter;
   final PersonRef? officer;
   final PersonRef? worker;
+  final PersonRef? warden;
 
   final bool isCrossZone;
   final Zone? lendingZone;
@@ -312,6 +353,7 @@ class Complaint {
     required this.status,
     required this.priority,
     this.isEmergency = false,
+    this.isHostelComplaint = false,
     required this.lat,
     required this.lng,
     this.landmark,
@@ -327,6 +369,7 @@ class Complaint {
     this.feedbackNote,
     this.officer,
     this.worker,
+    this.warden,
     required this.isCrossZone,
     this.lendingZone,
     this.beforeMedia = const [],
@@ -363,6 +406,7 @@ class Complaint {
       status: j['status'] as String,
       priority: j['priority'] as String? ?? 'MEDIUM',
       isEmergency: j['isEmergency'] as bool? ?? false,
+      isHostelComplaint: j['isHostelComplaint'] as bool? ?? false,
       lat: (loc['lat'] as num?)?.toDouble() ?? 0,
       lng: (loc['lng'] as num?)?.toDouble() ?? 0,
       landmark: j['landmark'] as String?,
@@ -381,6 +425,7 @@ class Complaint {
       officer:
           j['officer'] != null ? PersonRef.fromJson(j['officer'] as Map<String, dynamic>) : null,
       worker: j['worker'] != null ? PersonRef.fromJson(j['worker'] as Map<String, dynamic>) : null,
+      warden: j['warden'] != null ? PersonRef.fromJson(j['warden'] as Map<String, dynamic>) : null,
       isCrossZone: j['isCrossZone'] as bool? ?? false,
       lendingZone: j['lendingZone'] != null
           ? Zone.fromJson(j['lendingZone'] as Map<String, dynamic>)

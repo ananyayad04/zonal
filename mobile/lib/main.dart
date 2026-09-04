@@ -11,6 +11,8 @@ import 'features/officer/officer_home.dart';
 import 'features/officer/officer_pending_screen.dart';
 import 'features/resident/resident_home.dart';
 import 'features/worker/worker_home.dart';
+import 'features/supervisor/supervisor_home.dart';
+import 'features/warden/warden_home.dart';
 
 import 'core/config.dart';
 
@@ -82,6 +84,10 @@ class _RoleRouter extends StatelessWidget {
           ? const OfficerPendingScreen()
           : const OfficerHome(),
       Role.admin => const AdminHome(),
+      // Created directly by the Admin, always active immediately - no
+      // "awaiting verification" variant needed for either.
+      Role.workerSupervisor => const SupervisorHome(),
+      Role.warden => const WardenHome(),
       Role.unknown => const _UnknownRole(),
     };
   }

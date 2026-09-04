@@ -275,11 +275,69 @@ export async function recurrences({ days = env.insightWindowDays } = {}) {
   return rows;
 }
 
+/**
+ * Which hostels have nobody running them, and each hostel's own complaint
+ * load. Mirrors the zone/officer gap (a complaint with no zone officer
+ * escalates the same way NO_ZONE_OFFICER does) but surfaces it proactively
+ * here rather than waiting for a complaint to hit the gap.
+ */
+export async function hostelInsights({ days = env.insightWindowDays } = {}) {
+  const since = daysAgo(days);
+
+  const [hostels, complaints] = await Promise.all([
+    prisma.landmark.findMany({
+      where: { category: { in: ['BOYS_HOSTEL', 'GIRLS_HOSTEL'] } },
+      include: { warden: { select: { id: true, name: true } } },
+      orderBy: [{ category: 'asc' }, { sortOrder: 'asc' }, { name: 'asc' }],
+    }),
+    prisma.complaint.findMany({
+      where: { isHostelComplaint: true, submittedAt: { gte: since } },
+      select: { landmarkId: true, status: true, submittedAt: true, closedAt: true },
+    }),
+  ]);
+
+  const rows = hostels.map((h) => {
+    const mine = complaints.filter((c) => c.landmarkId === h.id);
+    const closed = mine.filter((c) => CLOSED.includes(c.status));
+    const resolution = closed
+      .map((c) =>
+        c.closedAt ? (new Date(c.closedAt) - new Date(c.submittedAt)) / 60000 : null,
+      )
+      .filter((n) => n != null);
+
+    return {
+      id: h.id,
+      name: h.name,
+      category: h.category,
+      warden: h.warden,
+      total: mine.length,
+      open: mine.filter((c) => !CLOSED.includes(c.status) && !DEAD.includes(c.status)).length,
+      closed: closed.length,
+      avgResolutionMinutes: resolution.length
+        ? Math.round(resolution.reduce((a, b) => a + b, 0) / resolution.length)
+        : null,
+    };
+  });
+
+  const unassignedHostels = rows.filter((r) => !r.warden);
+
+  return {
+    rows,
+    unassignedHostels,
+    note: unassignedHostels.length
+      ? `${unassignedHostels.length} hostel(s) have no warden assigned - ` +
+        `complaint(s) from ${unassignedHostels.length === 1 ? 'it' : 'them'} escalate ` +
+        'straight to the admin.'
+      : null,
+  };
+}
+
 export async function allInsights(opts = {}) {
-  const [hot, staff, recur] = await Promise.all([
+  const [hot, staff, recur, hostel] = await Promise.all([
     hotspots(opts),
     staffing(opts),
     recurrences(opts),
+    hostelInsights(opts),
   ]);
 
   return {
@@ -287,6 +345,7 @@ export async function allInsights(opts = {}) {
     hotspots: hot,
     staffing: staff,
     recurrences: recur,
+    hostels: hostel,
     headline: hot.find((h) => h.likelyStructural) ?? null,
   };
 }

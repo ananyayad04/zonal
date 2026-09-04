@@ -6,7 +6,10 @@ import { allInsights } from '../services/insights.js';
 
 const router = Router();
 
-router.use(authenticate, requireRole('ADMIN', 'OFFICER'));
+// Worker Supervisor has the same campus-wide reach over complaints as Admin,
+// so it gets the same reporting. Warden is scoped to one hostel and does not
+// need the campus-wide picture, so it is left out here.
+router.use(authenticate, requireRole('ADMIN', 'OFFICER', 'WORKER_SUPERVISOR'));
 
 const CLOSED_STATES = ['CLOSED', 'AUTO_CLOSED'];
 const DEAD_STATES = ['CLOSED', 'AUTO_CLOSED', 'REJECTED_INVALID'];
@@ -35,6 +38,11 @@ router.get(
         category: true,
         zoneId: true,
         isCrossZone: true,
+        isHostelComplaint: true,
+        landmarkId: true,
+        landmarkName: true,
+        reporterRole: true,
+        escalationReason: true,
         satisfaction: true,
         submittedAt: true,
         approvedAt: true,
@@ -48,6 +56,12 @@ router.get(
 
     const zones = await prisma.zone.findMany({ orderBy: { code: 'asc' } });
     const zoneById = Object.fromEntries(zones.map((z) => [z.id, z]));
+
+    const hostels = await prisma.landmark.findMany({
+      where: { category: { in: ['BOYS_HOSTEL', 'GIRLS_HOSTEL'] } },
+      include: { warden: { select: { id: true, name: true } } },
+      orderBy: [{ category: 'asc' }, { sortOrder: 'asc' }, { name: 'asc' }],
+    });
 
     const workerCounts = await prisma.workerProfile.groupBy({
       by: ['zoneId'],
@@ -111,6 +125,60 @@ router.get(
       };
     });
 
+    // Per-hostel breakdown - mirrors byZone, but only the complaints filed
+    // from inside a hostel, and keyed by which hostel rather than which zone.
+    // A hostel complaint still belongs to a zone (for the map/heatmap), but
+    // it never went through that zone's officer, so it is reported here
+    // instead of folded silently into the zone numbers above.
+    const hostelComplaints = complaints.filter((c) => c.isHostelComplaint);
+    const byHostel = hostels.map((h) => {
+      const inHostel = hostelComplaints.filter((c) => c.landmarkId === h.id);
+      const closedInHostel = inHostel.filter((c) => CLOSED_STATES.includes(c.status));
+      const hostelResolution = closedInHostel
+        .map((c) => minutesBetween(c.submittedAt, c.closedAt))
+        .filter((n) => n != null);
+
+      return {
+        id: h.id,
+        name: h.name,
+        category: h.category,
+        warden: h.warden,
+        total: inHostel.length,
+        open: inHostel.filter((c) => !DEAD_STATES.includes(c.status)).length,
+        closed: closedInHostel.length,
+        avgResolutionMinutes: hostelResolution.length ? Math.round(avg(hostelResolution)) : null,
+        resolutionRate: inHostel.length
+          ? Math.round((closedInHostel.length / inHostel.length) * 100)
+          : null,
+      };
+    });
+
+    // Citizen-reported vs staff-initiated: how much of the work came from a
+    // resident/student complaint versus a Worker Supervisor creating a work
+    // order directly.
+    const bySource = Object.entries(
+      complaints.reduce((acc, c) => {
+        acc[c.reporterRole] = (acc[c.reporterRole] ?? 0) + 1;
+        return acc;
+      }, {}),
+    )
+      .map(([reporterRole, count]) => ({ reporterRole, count }))
+      .sort((a, b) => b.count - a.count);
+
+    // Every reason a complaint has ever been kicked to the admin, so a gap in
+    // one specific handoff (say, hostels with no warden) is visible at a
+    // glance rather than buried in one flat "escalated" total.
+    const escalationReasons = Object.entries(
+      complaints
+        .filter((c) => c.status === 'ESCALATED' && c.escalationReason)
+        .reduce((acc, c) => {
+          acc[c.escalationReason] = (acc[c.escalationReason] ?? 0) + 1;
+          return acc;
+        }, {}),
+    )
+      .map(([reason, count]) => ({ reason, count }))
+      .sort((a, b) => b.count - a.count);
+
     const byCategory = Object.entries(
       complaints.reduce((acc, c) => {
         acc[c.category] = (acc[c.category] ?? 0) + 1;
@@ -144,6 +212,8 @@ router.get(
         escalated: complaints.filter((c) => c.status === 'ESCALATED').length,
         rejectedInvalid: complaints.filter((c) => c.status === 'REJECTED_INVALID').length,
         crossZone: complaints.filter((c) => c.isCrossZone).length,
+        hostelComplaints: hostelComplaints.length,
+        zoneComplaints: total - hostelComplaints.length,
       },
       rates: {
         resolutionRatePct: total ? Math.round((closed.length / total) * 100) : null,
@@ -162,6 +232,9 @@ router.get(
         endToEndResolution: resolutionTimes.length ? Math.round(avg(resolutionTimes)) : null,
       },
       byZone,
+      byHostel,
+      bySource,
+      escalationReasons,
       byCategory,
       byStatus,
       trend: Object.entries(trend)

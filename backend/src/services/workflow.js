@@ -14,10 +14,12 @@ import { ApiError } from '../middleware/error.js';
 
 /** Which statuses may legally follow which. */
 export const ALLOWED_TRANSITIONS = {
-  // Emergencies go straight to the zone officer, skipping admin verification.
-  SUBMITTED: ['UNDER_REVIEW', 'ALLOTTED_TO_OFFICER'],
+  // Emergencies go straight to the zone officer, and hostel complaints go
+  // straight to Admin/Warden/Supervisor - both skip admin verification.
+  SUBMITTED: ['UNDER_REVIEW', 'ALLOTTED_TO_OFFICER', 'ALLOTTED_TO_HOSTEL_STAFF'],
   UNDER_REVIEW: ['ALLOTTED_TO_OFFICER', 'REJECTED_INVALID'],
   ALLOTTED_TO_OFFICER: ['ALLOTTED_TO_WORKER', 'HELP_REQUESTED', 'ESCALATED'],
+  ALLOTTED_TO_HOSTEL_STAFF: ['ALLOTTED_TO_WORKER', 'ESCALATED'],
   HELP_REQUESTED: ['ALLOTTED_TO_WORKER', 'ALLOTTED_TO_OFFICER', 'ESCALATED'],
   ALLOTTED_TO_WORKER: ['IN_PROGRESS', 'ALLOTTED_TO_OFFICER', 'ESCALATED'],
   IN_PROGRESS: ['WORK_DONE', 'ESCALATED'],
@@ -36,6 +38,9 @@ export const TERMINAL_STATUSES = ['CLOSED', 'AUTO_CLOSED', 'REJECTED_INVALID'];
 function slaForStatus(status) {
   switch (status) {
     case 'ALLOTTED_TO_OFFICER':
+    // Same "how long staff have to allot a worker" meaning as the officer
+    // queue, so it reuses the same env var rather than adding a new one.
+    case 'ALLOTTED_TO_HOSTEL_STAFF':
       return hoursFromNow(env.slaOfficerAllotHours);
     case 'HELP_REQUESTED':
       return hoursFromNow(env.helpRequestExpiryHours);
@@ -54,6 +59,9 @@ function slaForStatus(status) {
 function timestampsForStatus(status, now) {
   switch (status) {
     case 'ALLOTTED_TO_OFFICER':
+    // Same meaning as the officer queue - "left the submit/verify stage" -
+    // so it reuses the same column rather than adding a new one.
+    case 'ALLOTTED_TO_HOSTEL_STAFF':
       return { allottedOfficerAt: now };
     case 'ALLOTTED_TO_WORKER':
       return { allottedWorkerAt: now };

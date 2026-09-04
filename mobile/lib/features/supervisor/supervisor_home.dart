@@ -6,30 +6,31 @@ import '../../core/palette.dart';
 import '../../core/session.dart';
 import '../../shared/ui.dart';
 import '../../shared/zone_grid.dart';
+import '../admin/analytics_screen.dart';
+import '../admin/escalations_screen.dart';
+import '../admin/hostel_complaints_screen.dart';
+import '../admin/insights_screen.dart';
+import '../admin/needs_attention_screen.dart';
+import '../admin/unallotted_complaints_screen.dart';
+import '../admin/verify_complaints_screen.dart';
 import '../shared/app_drawer.dart';
 import '../shared/complaint_search_screen.dart';
-import 'analytics_screen.dart';
-import 'audit_log_screen.dart';
-import 'campus_map_screen.dart';
-import 'create_supervisor_screen.dart';
-import 'hostel_complaints_screen.dart';
-import 'hostels_screen.dart';
-import 'insights_screen.dart';
-import 'multi_zone_workers_screen.dart';
-import 'needs_attention_screen.dart';
-import 'roster_screen.dart';
-import 'unallotted_complaints_screen.dart';
-import 'verify_people_screen.dart';
-import 'zones_screen.dart';
+import 'create_work_order_screen.dart';
 
-class AdminHome extends StatefulWidget {
-  const AdminHome({super.key});
+/// Worker Supervisor: the same campus-wide reach over complaints and
+/// allotment that Admin has (verify, monitor, force-allot, free workers) -
+/// reuses Admin's own screens directly, since the backend already grants
+/// this role the same access to those endpoints. What it does NOT get is
+/// personnel verification, zone drawing, or hostel/warden management -
+/// those stay on the Admin's own home screen.
+class SupervisorHome extends StatefulWidget {
+  const SupervisorHome({super.key});
 
   @override
-  State<AdminHome> createState() => _AdminHomeState();
+  State<SupervisorHome> createState() => _SupervisorHomeState();
 }
 
-class _AdminHomeState extends State<AdminHome> {
+class _SupervisorHomeState extends State<SupervisorHome> {
   late Future<Map<String, dynamic>> _future;
   ZoneGridMetric _metric = ZoneGridMetric.openComplaints;
 
@@ -63,7 +64,7 @@ class _AdminHomeState extends State<AdminHome> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Campus admin'),
+        title: const Text('Worker supervisor'),
         actions: [
           IconButton(
             tooltip: 'Find a complaint',
@@ -76,13 +77,17 @@ class _AdminHomeState extends State<AdminHome> {
         ],
       ),
       drawer: const AppDrawer(),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => _go(const CreateWorkOrderScreen()),
+        icon: const Icon(Icons.add),
+        label: const Text('Create work'),
+      ),
       body: FutureBuilder<Map<String, dynamic>>(
         future: _future,
         builder: (context, snapshot) => AsyncBody<Map<String, dynamic>>(
           snapshot: snapshot,
           onRetry: _refresh,
           builder: (data) {
-            final queues = data['queues'] as Map<String, dynamic>;
             final zones = (data['zones'] as List).cast<Map<String, dynamic>>();
 
             final cells = zones
@@ -97,8 +102,6 @@ class _AdminHomeState extends State<AdminHome> {
                     ))
                 .toList();
 
-            final pendingWorkers = queues['pendingWorkers'] as int? ?? 0;
-            final pendingOfficers = queues['pendingOfficers'] as int? ?? 0;
             final attentionCount = data['attentionCount'] as int? ?? 0;
 
             return RefreshIndicator(
@@ -107,48 +110,27 @@ class _AdminHomeState extends State<AdminHome> {
                 padding: const EdgeInsets.only(bottom: 30),
                 children: [
                   // Verification, allotment (zone or hostel) and escalations
-                  // are one merged, urgency-sorted queue - see
-                  // NeedsAttentionScreen. Personnel (workers/officers waiting
-                  // to be verified) stays separate: it is a different kind of
-                  // wait, with no complaint or deadline to sort by.
-                  if (attentionCount > 0 || pendingWorkers > 0 || pendingOfficers > 0)
+                  // merged into one urgency-sorted queue - see
+                  // NeedsAttentionScreen.
+                  if (attentionCount > 0)
                     Padding(
                       padding: const EdgeInsets.fromLTRB(12, 14, 12, 0),
                       child: Column(
                         children: [
-                          if (attentionCount > 0)
-                            _QueueTile(
-                              icon: Icons.priority_high,
-                              color: Palette.warning,
-                              count: attentionCount,
-                              title: 'item${attentionCount == 1 ? '' : 's'} need your attention',
-                              subtitle: 'Verification, allotment and escalations - most urgent first',
-                              onTap: () => _go(const NeedsAttentionScreen()),
-                            ),
-                          if (pendingWorkers > 0)
-                            _QueueTile(
-                              icon: Icons.how_to_reg,
-                              color: const Color(0xFF0072B2),
-                              count: pendingWorkers,
-                              title: 'worker${pendingWorkers == 1 ? '' : 's'} to verify',
-                              subtitle: 'They cannot be given work until verified',
-                              onTap: () => _go(const VerifyPeopleScreen()),
-                            ),
-                          if (pendingOfficers > 0)
-                            _QueueTile(
-                              icon: Icons.shield_outlined,
-                              color: const Color(0xFF7A52CC),
-                              count: pendingOfficers,
-                              title: 'officer${pendingOfficers == 1 ? '' : 's'} to approve',
-                              subtitle: 'A zone has no one routing its complaints '
-                                  'until you appoint someone',
-                              onTap: () => _go(const VerifyPeopleScreen(officers: true)),
-                            ),
+                          _QueueTile(
+                            icon: Icons.priority_high,
+                            color: Palette.warning,
+                            count: attentionCount,
+                            title: 'item${attentionCount == 1 ? '' : 's'} need your attention',
+                            subtitle: 'Verification, allotment and escalations - most urgent first',
+                            onTap: () => _go(const NeedsAttentionScreen()),
+                          ),
                         ],
                       ),
                     ),
 
-                  // The campus itself. Position is the information here.
+                  // Live state across every zone - who is free, and where the
+                  // open work sits right now.
                   Padding(
                     padding: const EdgeInsets.fromLTRB(18, 24, 18, 0),
                     child: Row(
@@ -204,80 +186,43 @@ class _AdminHomeState extends State<AdminHome> {
                     child: ZoneGridLegend(zones: cells),
                   ),
 
+                  const SizedBox(height: 22),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: _NavTile(
+                      icon: Icons.add_task,
+                      title: 'Create work',
+                      subtitle: 'Zone, type of work, describe it, then allot a worker',
+                      onTap: () => _go(const CreateWorkOrderScreen()),
+                    ),
+                  ),
+
                   _NavSection(
                     label: 'QUEUES',
                     tiles: [
                       _NavTile(
+                        icon: Icons.gavel_outlined,
+                        title: 'Verify complaints',
+                        subtitle: 'The first-step gate, same as the admin',
+                        onTap: () => _go(const VerifyComplaintsScreen()),
+                      ),
+                      _NavTile(
                         icon: Icons.assignment_late_outlined,
                         title: 'Unallotted complaints',
-                        subtitle: 'Allot straight to a worker, without the officer',
+                        subtitle: 'Allot straight to any free worker on campus',
                         onTap: () => _go(const UnallottedComplaintsScreen()),
                       ),
                       _NavTile(
-                        icon: Icons.home_repair_service_outlined,
+                        icon: Icons.apartment_outlined,
                         title: 'Hostel complaints',
                         subtitle: 'Every hostel at once - allot a free worker to any of them',
                         onTap: () => _go(const HostelComplaintsScreen()),
                       ),
                       _NavTile(
-                        icon: Icons.swap_horiz,
-                        title: 'Multi-zone workers',
-                        subtitle: 'Who is currently lent to another zone',
-                        onTap: () => _go(const MultiZoneWorkersScreen()),
-                      ),
-                    ],
-                  ),
-
-                  _NavSection(
-                    label: 'PEOPLE',
-                    tiles: [
-                      _NavTile(
-                        icon: Icons.groups_outlined,
-                        title: 'Roster',
-                        subtitle: 'Who runs every zone, hostel and supervises campus-wide',
-                        onTap: () => _go(const RosterScreen()),
-                      ),
-                      _NavTile(
-                        icon: Icons.badge_outlined,
-                        title: 'All workers',
-                        subtitle: 'Verified, pending and rejected',
-                        onTap: () => _go(const VerifyPeopleScreen()),
-                      ),
-                      _NavTile(
-                        icon: Icons.shield_outlined,
-                        title: 'Zone officers',
-                        subtitle: 'Who runs which zone - create or reassign',
-                        onTap: () => _go(const VerifyPeopleScreen(officers: true)),
-                      ),
-                      _NavTile(
-                        icon: Icons.supervisor_account_outlined,
-                        title: 'Worker supervisors',
-                        subtitle: 'Campus-wide reach over complaints and allotment',
-                        onTap: () => _go(const CreateSupervisorScreen()),
-                      ),
-                      _NavTile(
-                        icon: Icons.apartment_outlined,
-                        title: 'Hostels & wardens',
-                        subtitle: 'Who owns each hostel\'s complaints',
-                        onTap: () => _go(const HostelsScreen()),
-                      ),
-                    ],
-                  ),
-
-                  _NavSection(
-                    label: 'CAMPUS SETUP',
-                    tiles: [
-                      _NavTile(
-                        icon: Icons.edit_location_alt_outlined,
-                        title: 'Set up zones',
-                        subtitle: 'Draw boundaries, assign officers, check coverage',
-                        onTap: () => _go(const ZonesScreen()),
-                      ),
-                      _NavTile(
-                        icon: Icons.map_outlined,
-                        title: 'Campus map',
-                        subtitle: 'Zone boundaries and where complaints come from',
-                        onTap: () => _go(const CampusMapScreen()),
+                        icon: Icons.warning_amber_outlined,
+                        title: 'Escalations',
+                        subtitle: 'Missed deadlines and unanswered requests',
+                        onTap: () => _go(const EscalationsScreen()),
                       ),
                     ],
                   ),
@@ -294,14 +239,8 @@ class _AdminHomeState extends State<AdminHome> {
                       _NavTile(
                         icon: Icons.insights_outlined,
                         title: 'Analytics',
-                        subtitle: 'Resolution times, hotspots, cross-zone borrowing',
+                        subtitle: 'Resolution times, hostels, escalation reasons',
                         onTap: () => _go(const AnalyticsScreen()),
-                      ),
-                      _NavTile(
-                        icon: Icons.history,
-                        title: 'Activity log',
-                        subtitle: 'Who you verified, created or appointed, and when',
-                        onTap: () => _go(const AuditLogScreen()),
                       ),
                     ],
                   ),
@@ -362,30 +301,16 @@ class _QueueTile extends StatelessWidget {
                         children: [
                           Text(
                             '$count',
-                            style: TextStyle(
-                              fontSize: 21,
-                              fontWeight: FontWeight.w800,
-                              color: color,
-                            ),
+                            style: TextStyle(fontSize: 21, fontWeight: FontWeight.w800, color: color),
                           ),
                           const SizedBox(width: 6),
                           Expanded(
-                            child: Text(
-                              title,
-                              style: const TextStyle(
-                                fontSize: 15,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
+                            child: Text(title, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
                           ),
                         ],
                       ),
                       const SizedBox(height: 2),
-                      Text(
-                        subtitle,
-                        style: const TextStyle(
-                            fontSize: 12.5, color: Palette.inkSecondary),
-                      ),
+                      Text(subtitle, style: const TextStyle(fontSize: 12.5, color: Palette.inkSecondary)),
                     ],
                   ),
                 ),
@@ -399,10 +324,8 @@ class _QueueTile extends StatelessWidget {
   }
 }
 
-/// A labelled group of nav tiles. Eleven flat tiles in one list meant scanning
-/// past everything to find one thing - four short sections, each answering a
-/// different question ("what needs a worker", "who runs what", "how is the
-/// campus laid out", "how is it doing"), read faster than one long list.
+/// A labelled group of nav tiles, so the growing list of screens reads as a
+/// few short sections rather than one long scan.
 class _NavSection extends StatelessWidget {
   final String label;
   final List<Widget> tiles;
@@ -441,12 +364,7 @@ class _NavTile extends StatelessWidget {
   final String subtitle;
   final VoidCallback onTap;
 
-  const _NavTile({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-    required this.onTap,
-  });
+  const _NavTile({required this.icon, required this.title, required this.subtitle, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -456,10 +374,7 @@ class _NavTile extends StatelessWidget {
         contentPadding: const EdgeInsets.symmetric(horizontal: 15, vertical: 5),
         leading: Icon(icon, color: Palette.inkSecondary),
         title: Text(title, style: const TextStyle(fontWeight: FontWeight.w700)),
-        subtitle: Text(
-          subtitle,
-          style: const TextStyle(fontSize: 12.5, color: Palette.inkSecondary),
-        ),
+        subtitle: Text(subtitle, style: const TextStyle(fontSize: 12.5, color: Palette.inkSecondary)),
         trailing: const Icon(Icons.chevron_right, color: Palette.inkMuted),
         onTap: onTap,
       ),

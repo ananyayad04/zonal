@@ -171,6 +171,9 @@ class _EscalationsScreenState extends State<EscalationsScreen> {
           'Every worker on campus was busy or off duty when this came in.',
         'NO_ZONE_OFFICER' => 'That zone has no officer assigned to it.',
         'REJECTED_TWICE' => 'The resident sent the work back more than once.',
+        'NO_WARDEN_ASSIGNED' => 'That hostel has no warden assigned to it.',
+        'HOSTEL_STAFF_SLA_BREACH' => 'No one allotted a worker to this hostel complaint in time.',
+        'HOSTEL_REJECTED_TWICE' => 'The warden sent the work back more than once.',
         _ => 'Escalated to the admin.',
       };
 }

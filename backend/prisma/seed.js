@@ -139,6 +139,16 @@ const LANDMARKS = [
   { name: 'Residency Area', category: 'RESIDENCE', zone: 5 },
 ];
 
+/// One Worker Supervisor, plus one Warden per demo hostel - both created
+/// directly (no self-registration, no approval queue), mirroring how this
+/// seed script creates zone officers directly.
+const SUPERVISOR = { name: 'Meera Kapoor', email: 'supervisor@campus.edu' };
+
+const WARDENS = [
+  { name: 'Ashok Tiwari', email: 'warden.raman@campus.edu', hostelName: 'Raman Bhawan' },
+  { name: 'Sunita Bhatt', email: 'warden.saraswati@campus.edu', hostelName: 'Saraswati Hostel' },
+];
+
 const RESIDENTS = [
   { name: 'Aditya Srivastava', email: 'aditya@campus.edu' },
   { name: 'Neha Gupta', email: 'neha@campus.edu' },
@@ -182,6 +192,7 @@ async function main() {
   console.log('Seeding Smart Clean Campus...\n');
 
   // Wipe in dependency order so the seed is safely re-runnable.
+  await prisma.auditLog.deleteMany();
   await prisma.notification.deleteMany();
   await prisma.statusLog.deleteMany();
   await prisma.helpRequest.deleteMany();
@@ -311,6 +322,35 @@ async function main() {
   }
   console.log(`  ${LANDMARKS.length} landmarks created`);
 
+  // --- 5b. Worker Supervisor + Wardens ------------------------------------
+  // Created directly, not self-registered - there is no approval queue for
+  // either role.
+  await prisma.user.create({
+    data: {
+      name: SUPERVISOR.name,
+      email: SUPERVISOR.email,
+      phone: '9400000000',
+      passwordHash,
+      role: 'WORKER_SUPERVISOR',
+    },
+  });
+  console.log('  1 worker supervisor created');
+
+  for (const [i, w] of WARDENS.entries()) {
+    const hostel = await prisma.landmark.findUnique({ where: { name: w.hostelName } });
+    const warden = await prisma.user.create({
+      data: {
+        name: w.name,
+        email: w.email,
+        phone: `9500000${String(i).padStart(3, '0')}`,
+        passwordHash,
+        role: 'WARDEN',
+      },
+    });
+    await prisma.landmark.update({ where: { id: hostel.id }, data: { wardenId: warden.id } });
+  }
+  console.log(`  ${WARDENS.length} wardens created, one per hostel`);
+
   // --- 6. Residents ------------------------------------------------------
   for (const [i, r] of RESIDENTS.entries()) {
     await prisma.user.create({
@@ -344,6 +384,9 @@ async function main() {
   console.log('  Officer   officer1@campus.edu  ... officer8@campus.edu');
   console.log('  Worker    ramesh.kumar@campus.edu   (Zone 1, approved)');
   console.log('  Worker    salim.ansari@campus.edu   (Zone 1, PENDING approval)');
+  console.log('  Supervisor ' + SUPERVISOR.email);
+  console.log('  Warden    warden.raman@campus.edu     (Raman Bhawan)');
+  console.log('  Warden    warden.saraswati@campus.edu (Saraswati Hostel)');
   console.log('  Resident  aditya@campus.edu');
   console.log('  Student   rohit@campus.edu');
   console.log('\nCampus centre: ' + env.campusCenterLat + ', ' + env.campusCenterLng);

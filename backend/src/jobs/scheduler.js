@@ -104,6 +104,53 @@ export async function escalateStaleOfficerQueue() {
   return overdue.length;
 }
 
+/** Hostel complaints nobody allotted a worker to in time. */
+export async function escalateStaleHostelQueue() {
+  const overdue = await prisma.complaint.findMany({
+    where: { status: 'ALLOTTED_TO_HOSTEL_STAFF', slaDueAt: { lt: new Date() } },
+    select: { id: true, ref: true, assignedWardenId: true },
+  });
+
+  if (!overdue.length) return 0;
+  const admins = await adminIds();
+  const supervisors = (
+    await prisma.user.findMany({ where: { role: 'WORKER_SUPERVISOR' }, select: { id: true } })
+  ).map((s) => s.id);
+
+  for (const c of overdue) {
+    await transition({
+      complaintId: c.id,
+      toStatus: 'ESCALATED',
+      isSystem: true,
+      note: 'No one allotted a worker within the SLA',
+      data: { escalationReason: 'HOSTEL_STAFF_SLA_BREACH' },
+    });
+
+    await notifyMany([
+      ...admins.map((id) => ({
+        userId: id,
+        complaintId: c.id,
+        title: 'Hostel complaint SLA breached',
+        body: `${c.ref} was not allotted in time.`,
+      })),
+      ...supervisors.map((id) => ({
+        userId: id,
+        complaintId: c.id,
+        title: 'Hostel complaint escalated',
+        body: `${c.ref} passed its allotment deadline and is now with the admin.`,
+      })),
+      {
+        userId: c.assignedWardenId,
+        complaintId: c.id,
+        title: 'Complaint escalated',
+        body: `${c.ref} passed its allotment deadline and is now with the admin.`,
+      },
+    ]);
+  }
+
+  return overdue.length;
+}
+
 /** Help requests no other officer answered. */
 export async function expireStaleHelpRequests() {
   const expired = await prisma.helpRequest.findMany({
@@ -201,14 +248,16 @@ export async function resetDailyCounters() {
 
 /** Run every time-based rule once. Exported so it can be triggered manually. */
 export async function runAllChecks() {
-  const [autoClosed, officerEscalations, expiredHelp, workerEscalations] = await Promise.all([
-    autoCloseStaleWorkDone(),
-    escalateStaleOfficerQueue(),
-    expireStaleHelpRequests(),
-    escalateStaleWorkerTasks(),
-  ]);
+  const [autoClosed, officerEscalations, hostelEscalations, expiredHelp, workerEscalations] =
+    await Promise.all([
+      autoCloseStaleWorkDone(),
+      escalateStaleOfficerQueue(),
+      escalateStaleHostelQueue(),
+      expireStaleHelpRequests(),
+      escalateStaleWorkerTasks(),
+    ]);
 
-  const summary = { autoClosed, officerEscalations, expiredHelp, workerEscalations };
+  const summary = { autoClosed, officerEscalations, hostelEscalations, expiredHelp, workerEscalations };
   const touched = Object.values(summary).reduce((a, b) => a + b, 0);
   if (touched > 0) console.log('[jobs]', summary);
   return summary;

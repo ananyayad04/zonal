@@ -11,6 +11,7 @@ import '../../core/config.dart';
 import 'location_step.dart';
 import '../../core/models.dart';
 import '../../core/palette.dart';
+import '../../core/session.dart';
 import '../../core/theme.dart';
 import '../../shared/ui.dart';
 
@@ -36,12 +37,18 @@ class NewComplaintScreen extends StatefulWidget {
   State<NewComplaintScreen> createState() => _NewComplaintScreenState();
 }
 
+const _hostelCategories = {'BOYS_HOSTEL', 'GIRLS_HOSTEL'};
+
 class _NewComplaintScreenState extends State<NewComplaintScreen> {
   final _description = TextEditingController();
   final _recorder = AudioRecorder();
 
   String _category = 'GARBAGE';
   bool _isEmergency = false;
+  /// From inside a hostel - skips the officer queue, forwarded straight to
+  /// the hostel's warden. Only offered to students; residents don't live in
+  /// hostels.
+  bool _isHostelComplaint = false;
   final List<_Attachment> _attachments = [];
 
   // Where exactly. Compulsory: GPS gives the zone, this gives the building.
@@ -190,6 +197,13 @@ class _NewComplaintScreenState extends State<NewComplaintScreen> {
     }
   }
 
+  /// Ids of every landmark that is a hostel - used to filter the picker when
+  /// the hostel toggle is on, and to validate a landmark chosen before it.
+  Set<String> get _hostelLandmarkIds => {
+        for (final g in _landmarkGroups)
+          if (_hostelCategories.contains(g.category)) for (final l in g.landmarks) l.id,
+      };
+
   bool get _canAddMore => _attachments.length < AppConfig.maxAttachments;
 
   bool get _canSubmit =>
@@ -246,6 +260,7 @@ class _NewComplaintScreenState extends State<NewComplaintScreen> {
           if (_landmarkNote.text.trim().isNotEmpty)
             'landmarkNote': _landmarkNote.text.trim(),
           if (_isEmergency) 'isEmergency': 'true',
+          if (_isHostelComplaint) 'isHostelComplaint': 'true',
           'mediaMeta': jsonEncode(meta),
         },
         files: _attachments.map((a) => a.file).toList(),
@@ -359,7 +374,9 @@ class _NewComplaintScreenState extends State<NewComplaintScreen> {
           ),
           const SizedBox(height: 10),
           _LandmarkPicker(
-            groups: _landmarkGroups,
+            groups: _isHostelComplaint
+                ? _landmarkGroups.where((g) => _hostelCategories.contains(g.category)).toList()
+                : _landmarkGroups,
             selected: _landmark,
             loading: _loadingLandmarks,
             onSelected: (l) => setState(() => _landmark = l),
@@ -380,8 +397,29 @@ class _NewComplaintScreenState extends State<NewComplaintScreen> {
           const SizedBox(height: 18),
           _EmergencyToggle(
             value: _isEmergency,
-            onChanged: (v) => setState(() => _isEmergency = v),
+            onChanged: (v) => setState(() {
+              _isEmergency = v;
+              if (v) _isHostelComplaint = false;
+            }),
           ),
+
+          // Only students file hostel complaints - residents live off-campus.
+          if (context.watch<Session>().role == Role.student) ...[
+            const SizedBox(height: 12),
+            _HostelToggle(
+              value: _isHostelComplaint,
+              onChanged: (v) => setState(() {
+                _isHostelComplaint = v;
+                if (v) _isEmergency = false;
+                // A landmark picked before the toggle was on may not be a
+                // hostel - clear it so the requirement is never silently
+                // skipped.
+                if (v && _landmark != null && !_hostelLandmarkIds.contains(_landmark!.id)) {
+                  _landmark = null;
+                }
+              }),
+            ),
+          ],
 
           const SizedBox(height: 22),
           const _SectionLabel('3  ·  WHAT IS THE PROBLEM'),
@@ -747,6 +785,72 @@ class _EmergencyToggle extends StatelessWidget {
                 fontSize: 12.5,
                 height: 1.35,
                 color: value ? Palette.critical : Palette.inkSecondary,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// From inside a hostel - forwards straight to the hostel's warden instead of
+/// the normal officer queue, and only the warden approves the finished work.
+class _HostelToggle extends StatelessWidget {
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  const _HostelToggle({required this.value, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 10, 10, 12),
+      decoration: BoxDecoration(
+        color: value ? AppTheme.seed.withValues(alpha: 0.08) : Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: value ? AppTheme.seed : Colors.black.withValues(alpha: 0.12),
+          width: value ? 2 : 1,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                value ? Icons.apartment : Icons.apartment_outlined,
+                color: value ? AppTheme.seed : Palette.inkMuted,
+                size: 22,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'This is from inside a hostel',
+                  style: TextStyle(
+                    fontSize: 15.5,
+                    fontWeight: FontWeight.w800,
+                    color: value ? AppTheme.seed : Palette.inkPrimary,
+                  ),
+                ),
+              ),
+              Switch(value: value, onChanged: onChanged),
+            ],
+          ),
+          const SizedBox(height: 2),
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: Text(
+              value
+                  ? 'Goes straight to the hostel\'s warden instead of the usual '
+                      'queue - pick which hostel below. The warden approves the '
+                      'finished work, not you.'
+                  : 'Tap water, washrooms, or anything inside your hostel building.',
+              style: TextStyle(
+                fontSize: 12.5,
+                height: 1.35,
+                color: value ? AppTheme.seed : Palette.inkSecondary,
               ),
             ),
           ),
