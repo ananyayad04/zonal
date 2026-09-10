@@ -15,6 +15,7 @@ import 'create_supervisor_screen.dart';
 import 'hostel_complaints_screen.dart';
 import 'hostels_screen.dart';
 import 'insights_screen.dart';
+import 'landmarks_screen.dart';
 import 'multi_zone_workers_screen.dart';
 import 'needs_attention_screen.dart';
 import 'roster_screen.dart';
@@ -272,6 +273,12 @@ class _AdminHomeState extends State<AdminHome> {
                         title: 'Set up zones',
                         subtitle: 'Draw boundaries, assign officers, check coverage',
                         onTap: () => _go(const ZonesScreen()),
+                      ),
+                      _NavTile(
+                        icon: Icons.add_location_alt_outlined,
+                        title: 'Landmarks',
+                        subtitle: 'Departments, hostels, facilities - required on every complaint',
+                        onTap: () => _go(const LandmarksScreen()),
                       ),
                       _NavTile(
                         icon: Icons.map_outlined,
