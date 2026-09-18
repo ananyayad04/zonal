@@ -259,12 +259,49 @@ router.post(
 // be reviewed; the endpoint is otherwise dormant.
 // ---------------------------------------------------------------------------
 
-/** GET /api/admin/officers?status=PENDING */
+/**
+ * GET /api/admin/officers?status=PENDING
+ *
+ * PENDING/REJECTED still read the legacy OfficerProfile application table -
+ * dormant now that officers are admin-created, but kept for anything already
+ * in that pipeline from before the change.
+ *
+ * ACTIVE deliberately does NOT read OfficerProfile: an admin-created officer
+ * (POST /admin/zones/officers) never gets a profile row at all, the same way
+ * Warden and Worker Supervisor don't - they hold their zone directly via
+ * Zone.officerId. "Active" here means exactly that: every OFFICER who
+ * currently holds a zone, appointed either way.
+ */
 router.get(
   '/officers',
   requireRole('ADMIN'),
   asyncHandler(async (req, res) => {
     const status = req.query.status ?? 'PENDING';
+
+    if (status === 'ACTIVE') {
+      const officers = await prisma.user.findMany({
+        where: { role: 'OFFICER', zoneOwned: { isNot: null } },
+        include: {
+          zoneOwned: { select: { code: true, name: true, label: true } },
+          officerProfile: { select: { idProofUrl: true } },
+        },
+        orderBy: { name: 'asc' },
+      });
+
+      return res.json({
+        officers: officers.map((o) => ({
+          userId: o.id,
+          name: o.name,
+          email: o.email,
+          phone: o.phone,
+          registeredAt: o.createdAt,
+          zone: { code: o.zoneOwned.code, name: o.zoneOwned.name, label: o.zoneOwned.label },
+          zoneIsTaken: false,
+          idProofUrl: o.officerProfile?.idProofUrl ?? null,
+          approvalStatus: 'ACTIVE',
+        })),
+      });
+    }
 
     const officers = await prisma.officerProfile.findMany({
       where: { approvalStatus: status },
