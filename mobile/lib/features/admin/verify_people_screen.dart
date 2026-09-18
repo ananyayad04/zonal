@@ -115,6 +115,41 @@ class _VerifyPeopleScreenState extends State<VerifyPeopleScreen>
     }
   }
 
+  Future<void> _removeOfficer(Map<String, dynamic> officer) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Remove ${officer['name']}?'),
+        content: const Text(
+          'Their account is deleted and the zone they held (if any) becomes '
+          'free for a new officer. This cannot be undone.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Palette.critical),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    try {
+      final res = await context
+          .read<ApiClient>()
+          .delete('/admin/officers/${officer['userId']}');
+      if (mounted) {
+        setState(() => _decided.add(officer['userId'] as String));
+        showSnack(context, res['message'] as String? ?? 'Removed');
+        await _refresh();
+      }
+    } on ApiException catch (e) {
+      if (mounted) showSnack(context, e.message, error: true);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -242,6 +277,8 @@ class _VerifyPeopleScreenState extends State<VerifyPeopleScreen>
                     showActions: _index == 0,
                     onApprove: () => _decide(workers[i], true),
                     onReject: () => _decide(workers[i], false),
+                    onRemove:
+                        widget.officers ? () => _removeOfficer(workers[i]) : null,
                   );
                 },
               ),
@@ -259,6 +296,7 @@ class _PersonCard extends StatelessWidget {
   final bool showActions;
   final VoidCallback onApprove;
   final VoidCallback onReject;
+  final VoidCallback? onRemove;
 
   const _PersonCard({
     required this.worker,
@@ -266,6 +304,7 @@ class _PersonCard extends StatelessWidget {
     required this.showActions,
     required this.onApprove,
     required this.onReject,
+    this.onRemove,
   });
 
   @override
@@ -440,6 +479,22 @@ class _PersonCard extends StatelessWidget {
                     ),
                   ),
                 ],
+              ),
+            ] else if (officer) ...[
+              // A zone officer has no duty/availability/task-count concept -
+              // those belong to workers. Offer to remove the account instead.
+              const SizedBox(height: 12),
+              Align(
+                alignment: Alignment.centerRight,
+                child: OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Palette.critical,
+                    side: const BorderSide(color: Palette.critical),
+                  ),
+                  onPressed: onRemove,
+                  icon: const Icon(Icons.person_remove_outlined, size: 17),
+                  label: const Text('Remove'),
+                ),
               ),
             ] else ...[
               const SizedBox(height: 12),

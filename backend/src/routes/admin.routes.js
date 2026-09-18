@@ -433,6 +433,63 @@ router.post(
   }),
 );
 
+/**
+ * DELETE /api/admin/officers/:userId
+ *
+ * Removes an officer's account entirely - the zone they held (if any) is
+ * freed automatically (Zone.officerId is onDelete: SetNull). Refused, with
+ * a plain explanation, if they still have any complaint, help request, or
+ * activity history attached to their account - that history is never
+ * silently destroyed just because the account is.
+ */
+router.delete(
+  '/officers/:userId',
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
+    const officer = await prisma.user.findUnique({
+      where: { id: req.params.userId },
+      include: { zoneOwned: { select: { name: true } } },
+    });
+    if (!officer || officer.role !== 'OFFICER') {
+      throw new ApiError(404, 'Officer not found');
+    }
+
+    try {
+      await prisma.user.delete({ where: { id: officer.id } });
+    } catch (err) {
+      // A RESTRICT-constrained FK (HelpRequest.fromOfficerId) doesn't always
+      // surface as Prisma's own P2003/P2014 - a raw Postgres RESTRICT
+      // violation on delete comes back as an unmapped
+      // PrismaClientUnknownRequestError with no .code at all. Match on the
+      // message too so that case still gets the friendly 409 instead of
+      // leaking a raw DB error as a 500.
+      const blocked =
+        err.code === 'P2003' ||
+        err.code === 'P2014' ||
+        /foreign key constraint/i.test(err.message ?? '');
+      if (blocked) {
+        throw new ApiError(
+          409,
+          `${officer.name} cannot be removed - they still have complaints, help requests, or ` +
+            'activity history attached. That history has to stay put.',
+        );
+      }
+      throw err;
+    }
+
+    await logAudit({
+      actor: req.user,
+      action: 'OFFICER_REMOVED',
+      targetType: 'USER',
+      targetId: officer.id,
+      targetLabel: officer.name,
+      note: officer.zoneOwned ? `Was running ${officer.zoneOwned.name}` : null,
+    });
+
+    res.json({ message: `${officer.name} has been removed.` });
+  }),
+);
+
 // ---------------------------------------------------------------------------
 // Complaint verification
 // ---------------------------------------------------------------------------

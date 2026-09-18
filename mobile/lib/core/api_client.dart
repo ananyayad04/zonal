@@ -129,6 +129,9 @@ class ApiClient {
             ),
           ));
 
+  Future<Map<String, dynamic>> delete(String path) =>
+      _guard(() async => _decode(await http.delete(_uri(path), headers: _headers)));
+
   /// Multipart upload used by complaint filing and proof-of-work.
   ///
   /// [files] are attached under the given field name; [fields] carries the
