@@ -96,7 +96,8 @@ class _CampusMapScreenState extends State<CampusMapScreen> {
                     ),
                     children: [
                       TileLayer(
-                        urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                        urlTemplate:
+                            'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
                         userAgentPackageName: 'edu.campus.zonal',
                         maxZoom: 19,
                       ),

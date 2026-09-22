@@ -342,7 +342,12 @@ class _ZoneEditorScreenState extends State<ZoneEditorScreen> {
                     ),
                     children: [
                       TileLayer(
-                        urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                        // Satellite, not OSM's cartographic tiles - MMMUT's
+                        // campus is thin on OSM detail, but the actual
+                        // ground (buildings, paths, boundaries) shows up
+                        // clearly in imagery either way.
+                        urlTemplate:
+                            'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
                         userAgentPackageName: 'edu.campus.zonal',
                         maxZoom: 19,
                       ),
