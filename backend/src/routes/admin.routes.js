@@ -490,6 +490,65 @@ router.delete(
   }),
 );
 
+/**
+ * PUT /api/admin/personnel/:userId/credentials  { email?, password? }
+ *
+ * Resets the login for an officer, warden, or worker supervisor - the
+ * account, their zone/hostel assignment, and their history stay exactly as
+ * they are. This is the alternative to delete-and-recreate for someone who
+ * just needs new credentials (e.g. they forgot their password, or the admin
+ * never had it to begin with - passwords are hashed, never stored in the
+ * clear).
+ */
+router.put(
+  '/personnel/:userId/credentials',
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
+    const schema = z.object({
+      email: z.string().trim().toLowerCase().pipe(z.string().email()).optional(),
+      password: z.string().min(6, 'Password must be at least 6 characters').optional(),
+    });
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) {
+      throw new ApiError(400, 'Invalid details', parsed.error.flatten().fieldErrors);
+    }
+    const { email, password } = parsed.data;
+    if (!email && !password) {
+      throw new ApiError(400, 'Provide a new email or password');
+    }
+
+    const person = await prisma.user.findUnique({ where: { id: req.params.userId } });
+    if (!person || !['OFFICER', 'WARDEN', 'WORKER_SUPERVISOR'].includes(person.role)) {
+      throw new ApiError(404, 'Not found');
+    }
+
+    if (email) {
+      const existing = await prisma.user.findFirst({
+        where: { id: { not: person.id }, email: { equals: email, mode: 'insensitive' } },
+      });
+      if (existing) throw new ApiError(409, 'Another account already uses that email');
+    }
+
+    const data = {};
+    if (email) data.email = email;
+    if (password) data.passwordHash = await bcrypt.hash(password, 10);
+    await prisma.user.update({ where: { id: person.id }, data });
+
+    await logAudit({
+      actor: req.user,
+      action: 'CREDENTIALS_RESET',
+      targetType: 'USER',
+      targetId: person.id,
+      targetLabel: person.name,
+      note: [email ? 'email changed' : null, password ? 'password reset' : null]
+        .filter(Boolean)
+        .join(', '),
+    });
+
+    res.json({ message: `${person.name}'s login details were updated.` });
+  }),
+);
+
 // ---------------------------------------------------------------------------
 // Complaint verification
 // ---------------------------------------------------------------------------

@@ -5,6 +5,7 @@ import '../../core/api_client.dart';
 import '../../core/palette.dart';
 import '../../core/theme.dart';
 import '../../shared/ui.dart';
+import 'reset_credentials_dialog.dart';
 
 /// Who runs what, on one screen: every zone and its officer, every hostel
 /// and its warden, and every worker supervisor. The equivalent information
@@ -71,6 +72,8 @@ class _RosterScreenState extends State<RosterScreen> {
                         icon: Icons.supervisor_account_outlined,
                         name: s['name'] as String,
                         subtitle: s['email'] as String? ?? '',
+                        userId: s['id'] as String,
+                        onChanged: _refresh,
                       ),
 
                   const SizedBox(height: 24),
@@ -79,9 +82,10 @@ class _RosterScreenState extends State<RosterScreen> {
                     _RoleSlotRow(
                       dotColor: colorFromHex(z['colorHex'] as String? ?? '#4F86C6'),
                       title: '${z['name']} · ${z['label']}',
-                      personName: (z['officer'] as Map<String, dynamic>?)?['name'] as String?,
+                      person: z['officer'] as Map<String, dynamic>?,
                       detail: '${z['workersTotal'] ?? 0} worker(s) · '
                           '${z['openComplaints'] ?? 0} open complaint(s)',
+                      onChanged: _refresh,
                     ),
 
                   const SizedBox(height: 24),
@@ -90,7 +94,8 @@ class _RosterScreenState extends State<RosterScreen> {
                     _RoleSlotRow(
                       dotColor: const Color(0xFF009E73),
                       title: h['name'] as String,
-                      personName: (h['warden'] as Map<String, dynamic>?)?['name'] as String?,
+                      person: h['warden'] as Map<String, dynamic>?,
+                      onChanged: _refresh,
                     ),
                 ],
               ),
@@ -146,8 +151,16 @@ class _PersonRow extends StatelessWidget {
   final IconData icon;
   final String name;
   final String subtitle;
+  final String userId;
+  final VoidCallback onChanged;
 
-  const _PersonRow({required this.icon, required this.name, required this.subtitle});
+  const _PersonRow({
+    required this.icon,
+    required this.name,
+    required this.subtitle,
+    required this.userId,
+    required this.onChanged,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -172,6 +185,15 @@ class _PersonRow extends StatelessWidget {
               ],
             ),
           ),
+          IconButton(
+            tooltip: 'Reset login',
+            icon: const Icon(Icons.key_outlined, size: 19, color: Palette.inkMuted),
+            onPressed: () async {
+              final changed =
+                  await showResetCredentialsDialog(context, userId: userId, name: name);
+              if (changed) onChanged();
+            },
+          ),
         ],
       ),
     );
@@ -182,19 +204,22 @@ class _PersonRow extends StatelessWidget {
 class _RoleSlotRow extends StatelessWidget {
   final Color dotColor;
   final String title;
-  final String? personName;
+  final Map<String, dynamic>? person;
   final String? detail;
+  final VoidCallback onChanged;
 
   const _RoleSlotRow({
     required this.dotColor,
     required this.title,
-    required this.personName,
+    required this.person,
+    required this.onChanged,
     this.detail,
   });
 
   @override
   Widget build(BuildContext context) {
-    final vacant = personName == null;
+    final vacant = person == null;
+    final personName = person?['name'] as String?;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
@@ -231,6 +256,19 @@ class _RoleSlotRow extends StatelessWidget {
               color: vacant ? Palette.warning : Palette.inkPrimary,
             ),
           ),
+          if (!vacant)
+            IconButton(
+              tooltip: 'Reset login',
+              icon: const Icon(Icons.key_outlined, size: 19, color: Palette.inkMuted),
+              onPressed: () async {
+                final changed = await showResetCredentialsDialog(
+                  context,
+                  userId: person!['id'] as String,
+                  name: personName!,
+                );
+                if (changed) onChanged();
+              },
+            ),
         ],
       ),
     );
