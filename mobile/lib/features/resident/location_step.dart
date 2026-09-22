@@ -145,7 +145,14 @@ class _LocationStepState extends State<LocationStep> {
 
   @override
   Widget build(BuildContext context) {
-    if (_locked) return _LockedCard(value: widget.value!, zone: widget.zone, onRedo: _unlock);
+    if (_locked) {
+      return _LockedCard(
+        value: widget.value!,
+        zone: widget.zone,
+        zoneOutsideBoundary: widget.zoneOutsideBoundary,
+        onRedo: _unlock,
+      );
+    }
 
     if (_error != null && _pin == null) {
       return _Shell(
@@ -348,9 +355,15 @@ class _LocationStepState extends State<LocationStep> {
 class _LockedCard extends StatelessWidget {
   final PinnedLocation value;
   final Map<String, dynamic>? zone;
+  final bool zoneOutsideBoundary;
   final VoidCallback onRedo;
 
-  const _LockedCard({required this.value, required this.zone, required this.onRedo});
+  const _LockedCard({
+    required this.value,
+    required this.zone,
+    required this.zoneOutsideBoundary,
+    required this.onRedo,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -358,24 +371,34 @@ class _LockedCard extends StatelessWidget {
     final zoneLabel = zone?['label'] as String?;
     final zoneColor = colorFromHex(zone?['colorHex'] as String? ?? '#0072B2');
 
+    // A nearest-edge guess gets the same visual weight as a real lock - a
+    // confident green card here is what let a wrong zone slip past
+    // unnoticed. The warning banner below the form said as much, but this
+    // is the box residents actually look at.
+    final color = zoneOutsideBoundary ? Palette.warning : Palette.good;
+
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: Palette.good.withValues(alpha: 0.08),
+        color: color.withValues(alpha: 0.08),
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Palette.good.withValues(alpha: 0.5), width: 1.4),
+        border: Border.all(color: color.withValues(alpha: 0.5), width: 1.4),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              const Icon(Icons.check_circle, color: Palette.good, size: 21),
+              Icon(
+                zoneOutsideBoundary ? Icons.error_outline : Icons.check_circle,
+                color: color,
+                size: 21,
+              ),
               const SizedBox(width: 9),
-              const Expanded(
+              Expanded(
                 child: Text(
-                  'Location locked',
-                  style: TextStyle(fontSize: 15.5, fontWeight: FontWeight.w800),
+                  zoneOutsideBoundary ? 'Location locked — zone is a guess' : 'Location locked',
+                  style: const TextStyle(fontSize: 15.5, fontWeight: FontWeight.w800),
                 ),
               ),
               TextButton(
@@ -406,6 +429,14 @@ class _LockedCard extends StatelessWidget {
                 ),
               ],
             ),
+          if (zoneOutsideBoundary) ...[
+            const SizedBox(height: 6),
+            const Text(
+              'This spot is outside every drawn zone boundary — the nearest one is '
+              'shown as a guess. Pick the right zone below if this is wrong.',
+              style: TextStyle(fontSize: 12, height: 1.35, color: Palette.inkSecondary),
+            ),
+          ],
           const SizedBox(height: 6),
           Text(
             '${value.pin.latitude.toStringAsFixed(6)}, '

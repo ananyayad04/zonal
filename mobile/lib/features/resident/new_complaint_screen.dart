@@ -339,10 +339,13 @@ class _NewComplaintScreenState extends State<NewComplaintScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text(
-                    'You are between zones — a road, the park, or a rough fix. '
-                    'The nearest zone is used unless you pick another.',
+                    'PICK THE RIGHT ZONE',
                     style: TextStyle(
-                        fontSize: 12, height: 1.35, color: Palette.inkSecondary),
+                      fontSize: 10.5,
+                      letterSpacing: 1.4,
+                      fontWeight: FontWeight.w700,
+                      color: Palette.inkMuted,
+                    ),
                   ),
                   const SizedBox(height: 8),
                   Wrap(
