@@ -75,12 +75,20 @@ export async function findAllFreeWorkersCampusWide() {
   return result;
 }
 
-/** Every worker in a zone with their live state - powers the officer roster. */
-export async function getZoneRoster(zoneId, tx = null) {
+/**
+ * Every worker in a zone with their live state - powers the officer roster.
+ * Passing no `zoneId` returns every ACTIVE worker campus-wide, for the
+ * Worker Supervisor's roster, which isn't scoped to one zone the way an
+ * officer is.
+ */
+export async function getZoneRoster(zoneId = null, tx = null) {
   const db = tx ?? prisma;
   return db.workerProfile.findMany({
-    where: { zoneId, approvalStatus: 'ACTIVE' },
-    include: { user: { select: { id: true, name: true, phone: true, isActive: true } } },
+    where: { ...(zoneId ? { zoneId } : {}), approvalStatus: 'ACTIVE' },
+    include: {
+      user: { select: { id: true, name: true, phone: true, isActive: true } },
+      zone: { select: { id: true, code: true, name: true, label: true, colorHex: true } },
+    },
     orderBy: [{ availability: 'asc' }, { tasksCompletedToday: 'asc' }],
   });
 }

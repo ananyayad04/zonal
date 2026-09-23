@@ -2,16 +2,19 @@ import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
-import { env } from '../config/env.js';
+import { env, hoursFromNow } from '../config/env.js';
 import { ApiError, asyncHandler } from '../middleware/error.js';
 import { authenticate, requireRole } from '../middleware/auth.js';
+import { uploadMedia } from '../middleware/upload.js';
 import { transition, notify, notifyMany, generateRef } from '../services/workflow.js';
 import { logAudit } from '../services/audit.js';
+import { startTask, completeTask } from '../services/taskActions.js';
 import {
   routeToZoneOfficer,
   allotWorker,
   findFreeWorkers,
   findAllFreeWorkersCampusWide,
+  getZoneRoster,
 } from '../services/allocation.js';
 import {
   complaintInclude,
@@ -864,6 +867,109 @@ router.post(
 );
 
 /**
+ * PUT /api/admin/complaints/:id/duration  { durationHours }
+ *
+ * Extends or shortens the deadline on a task that is already out with a
+ * worker - the supervisor watching an allotted-work queue needs to react to
+ * "this is bigger than it looked" or "this can be quicker" without touching
+ * the task's status. Deliberately not routed through transition(), which
+ * would recompute slaDueAt from the status's own default and discard the
+ * explicit value given here.
+ */
+router.put(
+  '/complaints/:id/duration',
+  staffOrAdmin,
+  asyncHandler(async (req, res) => {
+    const schema = z.object({ durationHours: z.number().positive().max(2160) });
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) throw new ApiError(400, 'A positive durationHours is required');
+
+    const complaint = await prisma.complaint.findUnique({ where: { id: req.params.id } });
+    if (!complaint) throw new ApiError(404, 'Complaint not found');
+    if (
+      !['ALLOTTED_TO_WORKER', 'IN_PROGRESS', 'REOPENED'].includes(complaint.status) ||
+      !complaint.assignedWorkerId
+    ) {
+      throw new ApiError(409, 'This task has no active deadline to adjust');
+    }
+
+    const slaDueAt = hoursFromNow(parsed.data.durationHours);
+    await prisma.complaint.update({ where: { id: complaint.id }, data: { slaDueAt } });
+    await prisma.statusLog.create({
+      data: {
+        complaintId: complaint.id,
+        fromStatus: complaint.status,
+        toStatus: complaint.status,
+        actorId: req.user.id,
+        note: `Deadline adjusted by ${req.user.name}`,
+      },
+    });
+
+    await notify({
+      userId: complaint.assignedWorkerId,
+      complaintId: complaint.id,
+      title: 'Deadline changed',
+      body: `${complaint.ref}'s deadline was changed by ${req.user.name}.`,
+    });
+
+    const updated = await loadComplaintForResponse(prisma, complaint.id);
+    res.json({ complaint: serializeComplaint(updated), message: 'Deadline updated.' });
+  }),
+);
+
+/**
+ * POST /api/admin/complaints/:id/start-for-worker
+ * POST /api/admin/complaints/:id/complete-for-worker
+ *
+ * Many campus workers have no smartphone and will never open the app - the
+ * supervisor who created their account starts and completes their tasks on
+ * their behalf, taking the after-photo on their own phone. These are proxy
+ * versions of the worker's own POST /worker/tasks/:id/start and
+ * /tasks/:id/done, sharing the same transition/media logic via
+ * services/taskActions.js, but with no ownership check: unlike a worker
+ * acting for themselves, the whole point is acting for someone else.
+ */
+router.post(
+  '/complaints/:id/start-for-worker',
+  staffOrAdmin,
+  asyncHandler(async (req, res) => {
+    const complaint = await prisma.complaint.findUnique({
+      where: { id: req.params.id },
+      include: { assignedWorker: { select: { name: true } } },
+    });
+    if (!complaint) throw new ApiError(404, 'Complaint not found');
+    if (!complaint.assignedWorkerId) throw new ApiError(409, 'No worker is assigned to this task');
+
+    const result = await startTask({
+      complaint,
+      actor: req.user,
+      workerName: complaint.assignedWorker.name,
+    });
+    res.json(result);
+  }),
+);
+
+router.post(
+  '/complaints/:id/complete-for-worker',
+  staffOrAdmin,
+  uploadMedia.array('media', 5),
+  asyncHandler(async (req, res) => {
+    const complaint = await prisma.complaint.findUnique({ where: { id: req.params.id } });
+    if (!complaint) throw new ApiError(404, 'Complaint not found');
+    if (!complaint.assignedWorkerId) throw new ApiError(409, 'No worker is assigned to this task');
+
+    const result = await completeTask({
+      complaint,
+      actor: req.user,
+      files: req.files,
+      mediaMetaRaw: req.body?.mediaMeta,
+      note: req.body?.note,
+    });
+    res.json(result);
+  }),
+);
+
+/**
  * GET /api/admin/free-workers - every free worker on campus, by zone.
  *
  * Each zone also reports its own open-complaint count, so an admin picking a
@@ -973,6 +1079,142 @@ router.post(
     res.status(201).json({
       supervisor: { id: supervisor.id, name: supervisor.name, email: supervisor.email },
       message: `${supervisor.name} can now sign in as a Worker Supervisor.`,
+    });
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// Direct worker accounts (Worker Supervisor's roster)
+//
+// A worker who registers themselves lands in the PENDING queue on
+// VerifyPeopleScreen and needs an Admin to approve them. Many campus workers
+// will never do that self-registration at all - no phone, no interest in
+// installing an app - so the supervisor who actually knows them creates the
+// account directly here, zone-wise, active immediately. Unlike Officer/
+// Warden/Supervisor accounts (which own a single seat and need no ongoing
+// day-to-day management from this file), a worker's duty status has to be
+// controllable from here too: the worker-only POST /worker/duty is exactly
+// the thing a phone-less worker can never call themselves.
+// ---------------------------------------------------------------------------
+
+/** GET /api/admin/workers/roster?zoneCode= - every active worker, campus-wide or one zone. */
+router.get(
+  '/workers/roster',
+  staffOrAdmin,
+  asyncHandler(async (req, res) => {
+    const zoneCode = req.query.zoneCode ? Number(req.query.zoneCode) : null;
+    const zone = zoneCode ? await prisma.zone.findUnique({ where: { code: zoneCode } }) : null;
+    if (zoneCode && !zone) throw new ApiError(404, `Zone ${zoneCode} not found`);
+
+    const roster = await getZoneRoster(zone?.id ?? null);
+
+    res.json({
+      workers: roster.map((w) => ({
+        userId: w.userId,
+        name: w.user.name,
+        phone: w.user.phone,
+        zone: w.zone,
+        dutyStatus: w.dutyStatus,
+        availability: w.availability,
+        activeTaskCount: w.activeTaskCount,
+        tasksCompletedToday: w.tasksCompletedToday,
+        tasksCompletedTotal: w.tasksCompletedTotal,
+      })),
+    });
+  }),
+);
+
+/** POST /api/admin/workers  { name, email, phone?, password, zoneCode } */
+router.post(
+  '/workers',
+  staffOrAdmin,
+  asyncHandler(async (req, res) => {
+    const schema = z.object({
+      name: z.string().min(2, 'Name is too short'),
+      email: z.string().trim().toLowerCase().pipe(z.string().email()),
+      phone: z.string().min(10).max(15).optional(),
+      password: z.string().min(6, 'Password must be at least 6 characters'),
+      zoneCode: z.coerce.number().int().min(1).max(8),
+    });
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) {
+      throw new ApiError(400, 'Invalid details', parsed.error.flatten().fieldErrors);
+    }
+    const { name, email, phone, password, zoneCode } = parsed.data;
+
+    const zone = await prisma.zone.findUnique({ where: { code: zoneCode } });
+    if (!zone) throw new ApiError(404, `Zone ${zoneCode} not found`);
+
+    const existing = await prisma.user.findFirst({
+      where: { OR: [{ email: { equals: email, mode: 'insensitive' } }, ...(phone ? [{ phone }] : [])] },
+    });
+    if (existing) throw new ApiError(409, 'An account with that email or phone already exists');
+
+    const passwordHash = await bcrypt.hash(password, 10);
+    const worker = await prisma.user.create({
+      data: {
+        name,
+        email,
+        phone,
+        passwordHash,
+        role: 'WORKER',
+        // Active immediately, on duty immediately - this bypasses the
+        // self-registration PENDING gate entirely, and starts on duty since
+        // there is no self-service way for this account to ever clock on.
+        workerProfile: {
+          create: { zoneId: zone.id, approvalStatus: 'ACTIVE', approvedAt: new Date(), dutyStatus: 'ON' },
+        },
+      },
+    });
+
+    await logAudit({
+      actor: req.user,
+      action: 'WORKER_CREATED_DIRECT',
+      targetType: 'USER',
+      targetId: worker.id,
+      targetLabel: worker.name,
+      note: `Zone: ${zone.name}`,
+    });
+
+    res.status(201).json({
+      worker: { id: worker.id, name: worker.name, email: worker.email },
+      message: `${worker.name} can now be allotted work in ${zone.name}.`,
+    });
+  }),
+);
+
+/**
+ * PUT /api/admin/workers/:userId/duty  { dutyStatus: 'ON' | 'OFF' }
+ * Same rule as the worker's own POST /worker/duty: refused while they are
+ * holding a live task, so nothing is ever stranded with nobody accountable.
+ */
+router.put(
+  '/workers/:userId/duty',
+  staffOrAdmin,
+  asyncHandler(async (req, res) => {
+    const schema = z.object({ dutyStatus: z.enum(['ON', 'OFF']) });
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) throw new ApiError(400, 'dutyStatus must be ON or OFF');
+
+    const profile = await prisma.workerProfile.findUnique({
+      where: { userId: req.params.userId },
+      include: { user: { select: { name: true } } },
+    });
+    if (!profile) throw new ApiError(404, 'Worker not found');
+
+    if (parsed.data.dutyStatus === 'OFF' && profile.activeTaskCount > 0) {
+      throw new ApiError(409, `${profile.user.name} is holding a task - reassign or complete it first`);
+    }
+
+    const updated = await prisma.workerProfile.update({
+      where: { userId: req.params.userId },
+      data: { dutyStatus: parsed.data.dutyStatus },
+    });
+
+    res.json({
+      dutyStatus: updated.dutyStatus,
+      availability: updated.availability,
+      message: `${profile.user.name} is now ${updated.dutyStatus === 'ON' ? 'on' : 'off'} duty.`,
     });
   }),
 );

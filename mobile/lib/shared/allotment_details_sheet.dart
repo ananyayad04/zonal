@@ -4,7 +4,7 @@ import '../core/palette.dart';
 
 enum DurationUnit { hours, days, weeks, months }
 
-extension on DurationUnit {
+extension DurationUnitLabel on DurationUnit {
   String get label => switch (this) {
         DurationUnit.hours => 'Hours',
         DurationUnit.days => 'Days',

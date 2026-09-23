@@ -8,6 +8,7 @@ import '../../shared/ui.dart';
 import '../../shared/zone_grid.dart';
 import '../shared/app_drawer.dart';
 import '../shared/complaint_search_screen.dart';
+import '../supervisor/allotted_work_screen.dart';
 import 'analytics_screen.dart';
 import 'audit_log_screen.dart';
 import 'campus_map_screen.dart';
@@ -213,6 +214,13 @@ class _AdminHomeState extends State<AdminHome> {
                         title: 'Unallotted complaints',
                         subtitle: 'Allot straight to a worker, without the officer',
                         onTap: () => _go(const UnallottedComplaintsScreen()),
+                      ),
+                      _NavTile(
+                        icon: Icons.assignment_turned_in_outlined,
+                        title: 'Allotted work',
+                        subtitle: 'Every task out with a worker - adjust deadlines, '
+                            'start or finish one on their behalf',
+                        onTap: () => _go(const AllottedWorkScreen()),
                       ),
                       _NavTile(
                         icon: Icons.home_repair_service_outlined,

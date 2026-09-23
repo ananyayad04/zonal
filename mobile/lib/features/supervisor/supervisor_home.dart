@@ -15,7 +15,10 @@ import '../admin/unallotted_complaints_screen.dart';
 import '../admin/verify_complaints_screen.dart';
 import '../shared/app_drawer.dart';
 import '../shared/complaint_search_screen.dart';
+import 'allotted_work_screen.dart';
 import 'create_work_order_screen.dart';
+import 'my_work_approvals_screen.dart';
+import 'workers_roster_screen.dart';
 
 /// Worker Supervisor: the same campus-wide reach over complaints and
 /// allotment that Admin has (verify, monitor, force-allot, free workers) -
@@ -213,6 +216,13 @@ class _SupervisorHomeState extends State<SupervisorHome> {
                         onTap: () => _go(const UnallottedComplaintsScreen()),
                       ),
                       _NavTile(
+                        icon: Icons.assignment_turned_in_outlined,
+                        title: 'Allotted work',
+                        subtitle: 'Every task out with a worker - adjust deadlines, '
+                            'start or finish one on their behalf',
+                        onTap: () => _go(const AllottedWorkScreen()),
+                      ),
+                      _NavTile(
                         icon: Icons.apartment_outlined,
                         title: 'Hostel complaints',
                         subtitle: 'Every hostel at once - allot a free worker to any of them',
@@ -223,6 +233,24 @@ class _SupervisorHomeState extends State<SupervisorHome> {
                         title: 'Escalations',
                         subtitle: 'Missed deadlines and unanswered requests',
                         onTap: () => _go(const EscalationsScreen()),
+                      ),
+                      _NavTile(
+                        icon: Icons.fact_check_outlined,
+                        title: 'My work orders',
+                        subtitle: 'Extra work you created - approve it once a worker finishes',
+                        onTap: () => _go(const MyWorkApprovalsScreen()),
+                      ),
+                    ],
+                  ),
+
+                  _NavSection(
+                    label: 'MY WORKERS',
+                    tiles: [
+                      _NavTile(
+                        icon: Icons.engineering_outlined,
+                        title: 'Workers roster',
+                        subtitle: 'Create a worker directly, zone-wise, and set duty status',
+                        onTap: () => _go(const WorkersRosterScreen()),
                       ),
                     ],
                   ),

@@ -3,14 +3,10 @@ import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
 import { ApiError, asyncHandler } from '../middleware/error.js';
 import { authenticate, requireRole, requireApprovedWorker } from '../middleware/auth.js';
-import {
-  uploadMedia,
-  assertWithinTypeLimit,
-  assertWithinDurationLimit,
-} from '../middleware/upload.js';
-import { putMedia, removeMedia } from '../lib/storage.js';
-import { transition, notify, notifyMany } from '../services/workflow.js';
+import { uploadMedia } from '../middleware/upload.js';
+import { transition, notify } from '../services/workflow.js';
 import { releaseWorker } from '../services/allocation.js';
+import { startTask, completeTask } from '../services/taskActions.js';
 import {
   complaintInclude,
   serializeComplaint,
@@ -131,27 +127,8 @@ router.post(
   '/tasks/:id/start',
   asyncHandler(async (req, res) => {
     const complaint = await loadOwnTask(req);
-
-    if (!['ALLOTTED_TO_WORKER', 'REOPENED'].includes(complaint.status)) {
-      throw new ApiError(409, `You cannot start a task that is ${complaint.status}`);
-    }
-
-    await transition({
-      complaintId: complaint.id,
-      toStatus: 'IN_PROGRESS',
-      actor: req.user,
-      note: complaint.status === 'REOPENED' ? 'Worker restarted after rework' : 'Worker started',
-    });
-    const updated = await loadComplaintForResponse(prisma, complaint.id);
-
-    await notify({
-      userId: complaint.reporterId,
-      complaintId: complaint.id,
-      title: 'Work started',
-      body: `${complaint.ref}: ${req.user.name} has started work.`,
-    });
-
-    res.json({ complaint: serializeComplaint(updated), message: 'Task started.' });
+    const result = await startTask({ complaint, actor: req.user, workerName: req.user.name });
+    res.json(result);
   }),
 );
 
@@ -168,98 +145,15 @@ router.post(
   '/tasks/:id/done',
   uploadMedia.array('media', 5),
   asyncHandler(async (req, res) => {
-    const files = req.files ?? [];
-    // Files sit in memory until storage accepts them, so a failed request has
-    // nothing on disk to remove. Anything already stored is cleaned separately.
-    const cleanUp = () => {};
-
-    let complaint;
-    try {
-      complaint = await loadOwnTask(req);
-    } catch (err) {
-      cleanUp();
-      throw err;
-    }
-
-    if (complaint.status !== 'IN_PROGRESS') {
-      cleanUp();
-      throw new ApiError(409, 'Start the task before marking it done');
-    }
-    if (!files.length) {
-      throw new ApiError(400, 'Attach at least one photo of the completed work');
-    }
-
-    let meta = [];
-    if (req.body?.mediaMeta) {
-      try {
-        meta = JSON.parse(req.body.mediaMeta);
-        if (!Array.isArray(meta)) meta = [];
-      } catch {
-        cleanUp();
-        throw new ApiError(400, 'mediaMeta must be a JSON array');
-      }
-    }
-
-    const prepared = [];
-    try {
-      for (const [i, file] of files.entries()) {
-        const type = assertWithinTypeLimit(file);
-        const m = meta[i] ?? {};
-        assertWithinDurationLimit(type, m.durationSec);
-
-        prepared.push({
-          complaintId: complaint.id,
-          url: await putMedia(file),
-          type,
-          phase: 'AFTER',
-          mimeType: file.mimetype,
-          sizeBytes: file.size,
-          durationSec: m.durationSec ?? null,
-          capturedLat: m.lat ?? complaint.lat,
-          capturedLng: m.lng ?? complaint.lng,
-          capturedAt: m.capturedAt ? new Date(m.capturedAt) : new Date(),
-          uploadedById: req.user.id,
-        });
-      }
-    } catch (err) {
-      // Some proof photos may already be stored - remove them rather than leak.
-      await Promise.all(prepared.map((p) => removeMedia(p.url)));
-      throw err;
-    }
-
-    await prisma.media.createMany({ data: prepared });
-
-    const updated = await transition({
-      complaintId: complaint.id,
-      toStatus: 'WORK_DONE',
+    const complaint = await loadOwnTask(req);
+    const result = await completeTask({
+      complaint,
       actor: req.user,
-      note: req.body?.note ? `Worker: ${req.body.note}` : 'Work completed, proof uploaded',
+      files: req.files,
+      mediaMetaRaw: req.body?.mediaMeta,
+      note: req.body?.note,
     });
-
-    await notifyMany([
-      {
-        userId: complaint.reporterId,
-        complaintId: complaint.id,
-        title: 'Please confirm the work',
-        body: `${complaint.ref} has been completed. Open the app to approve or send it back.`,
-      },
-      {
-        userId: complaint.assignedOfficerId,
-        complaintId: complaint.id,
-        title: 'Work completed',
-        body: `${complaint.ref} is done and awaiting the resident's confirmation.`,
-      },
-    ]);
-
-    const full = await prisma.complaint.findUnique({
-      where: { id: complaint.id },
-      include: complaintInclude,
-    });
-
-    res.json({
-      complaint: serializeComplaint({ ...full, ...updated, media: full.media }),
-      message: 'Marked done. Waiting for the resident to confirm.',
-    });
+    res.json(result);
   }),
 );
 
