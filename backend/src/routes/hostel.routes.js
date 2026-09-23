@@ -126,12 +126,14 @@ router.post(
 
 /**
  * POST /api/hostel/complaints/:id/approve  { note }
- * Warden-only: the reporting student does NOT get the usual confirm/reopen
- * step for a hostel complaint - the warden's approval alone closes it.
+ * Warden or Worker Supervisor: the reporting student does NOT get the usual
+ * confirm/reopen step for a hostel complaint - either of these approving
+ * alone closes it. A Supervisor is campus-wide and not tied to one hostel,
+ * so loadOwnHostelComplaint's own-hostel check only applies to WARDEN.
  */
 router.post(
   '/complaints/:id/approve',
-  requireRole('WARDEN'),
+  requireRole('WARDEN', 'WORKER_SUPERVISOR'),
   asyncHandler(async (req, res) => {
     const schema = z.object({
       note: z.string({ required_error: 'Say a few words about the work' }).trim().min(3).max(500),
@@ -152,7 +154,7 @@ router.post(
       complaintId: complaint.id,
       toStatus: 'CLOSED',
       actor: req.user,
-      note: `Warden approved the work: ${parsed.data.note}`,
+      note: `${req.user.name} approved the work: ${parsed.data.note}`,
       data: { satisfaction: 'SATISFIED', feedbackNote: parsed.data.note },
     });
 
@@ -161,7 +163,7 @@ router.post(
         userId: complaint.assignedWorkerId,
         complaintId: complaint.id,
         title: 'Work approved',
-        body: `${complaint.ref} was approved by the warden. "${parsed.data.note}"`,
+        body: `${complaint.ref} was approved by ${req.user.name}. "${parsed.data.note}"`,
       },
       {
         userId: complaint.reporterId,
@@ -178,12 +180,12 @@ router.post(
 
 /**
  * POST /api/hostel/complaints/:id/reject-completion  { note }
- * Warden-only mirror of the reporter's "not satisfied" branch: back to the
- * same worker once, then escalated to the admin.
+ * Warden or Worker Supervisor mirror of the reporter's "not satisfied"
+ * branch: back to the same worker once, then escalated to the admin.
  */
 router.post(
   '/complaints/:id/reject-completion',
-  requireRole('WARDEN'),
+  requireRole('WARDEN', 'WORKER_SUPERVISOR'),
   asyncHandler(async (req, res) => {
     const schema = z.object({
       note: z.string({ required_error: 'Say a few words about the work' }).trim().min(3).max(500),
@@ -208,7 +210,7 @@ router.post(
         complaintId: complaint.id,
         toStatus: 'ESCALATED',
         actor: req.user,
-        note: `Warden rejected ${nextReopenCount} times - escalated to admin`,
+        note: `${req.user.name} rejected ${nextReopenCount} times - escalated to admin`,
         data: {
           satisfaction: 'UNSATISFIED',
           unsatisfiedNote: parsed.data.note,
@@ -224,7 +226,7 @@ router.post(
           userId: a.id,
           complaintId: complaint.id,
           title: 'Hostel complaint escalated',
-          body: `${complaint.ref} was rejected by the warden more than once.`,
+          body: `${complaint.ref} was rejected more than once.`,
         })),
         {
           userId: complaint.reporterId,
@@ -245,7 +247,7 @@ router.post(
       complaintId: complaint.id,
       toStatus: 'REOPENED',
       actor: req.user,
-      note: `Warden not satisfied: ${parsed.data.note}`,
+      note: `${req.user.name} not satisfied: ${parsed.data.note}`,
       data: {
         satisfaction: 'UNSATISFIED',
         unsatisfiedNote: parsed.data.note,
@@ -264,7 +266,7 @@ router.post(
         userId: complaint.reporterId,
         complaintId: complaint.id,
         title: 'Complaint reopened',
-        body: `${complaint.ref} was sent back by the warden.`,
+        body: `${complaint.ref} was sent back by ${req.user.name}.`,
       },
     ]);
 

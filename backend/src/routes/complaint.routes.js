@@ -585,11 +585,21 @@ router.post(
     const complaint = await prisma.complaint.findUnique({ where: { id: req.params.id } });
     if (!complaint) throw new ApiError(404, 'Complaint not found');
 
-    if (complaint.reporterId !== req.user.id) {
+    // The reporter always may. A Worker Supervisor may too, campus-wide -
+    // not just for the work orders they filed themselves - since they are
+    // watching allotted work generally and a resident can be slow to
+    // respond. Hostel complaints are still routed through the hostel
+    // router's own approve/reject-completion instead, for anyone.
+    const isOwnReport = complaint.reporterId === req.user.id;
+    const isSupervisor = req.user.role === 'WORKER_SUPERVISOR';
+    if (!isOwnReport && !isSupervisor) {
       throw new ApiError(403, 'Only the person who filed this complaint can confirm it');
     }
     if (complaint.isHostelComplaint) {
-      throw new ApiError(409, 'Hostel complaints are confirmed by the warden, not the reporter.');
+      throw new ApiError(
+        409,
+        'Hostel complaints are confirmed by the warden or a Worker Supervisor, not here.',
+      );
     }
     if (complaint.status !== 'WORK_DONE') {
       throw new ApiError(409, 'This complaint is not waiting for your confirmation');
@@ -658,7 +668,7 @@ router.post(
         complaintId: complaint.id,
         toStatus: 'ESCALATED',
         actor: req.user,
-        note: `Rejected ${nextReopenCount} times - escalated to admin`,
+        note: `Rejected ${nextReopenCount} times by ${req.user.name} - escalated to admin`,
         data: {
           satisfaction: 'UNSATISFIED',
           unsatisfiedNote: note ?? null,
@@ -674,7 +684,7 @@ router.post(
           userId: a.id,
           complaintId: complaint.id,
           title: 'Complaint escalated',
-          body: `${complaint.ref} was rejected by the resident more than once.`,
+          body: `${complaint.ref} was rejected more than once.`,
         })),
         {
           userId: complaint.assignedOfficerId,
@@ -696,7 +706,7 @@ router.post(
       complaintId: complaint.id,
       toStatus: 'REOPENED',
       actor: req.user,
-      note: note ? `Resident not satisfied: ${note}` : 'Resident not satisfied',
+      note: note ? `${req.user.name} not satisfied: ${note}` : `${req.user.name} not satisfied`,
       data: {
         satisfaction: 'UNSATISFIED',
         unsatisfiedNote: note ?? null,

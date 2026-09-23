@@ -236,8 +236,8 @@ class _SupervisorHomeState extends State<SupervisorHome> {
                       ),
                       _NavTile(
                         icon: Icons.fact_check_outlined,
-                        title: 'My work orders',
-                        subtitle: 'Extra work you created - approve it once a worker finishes',
+                        title: 'Awaiting approval',
+                        subtitle: 'Any finished complaint or work order, campus-wide - not just your own',
                         onTap: () => _go(const MyWorkApprovalsScreen()),
                       ),
                     ],

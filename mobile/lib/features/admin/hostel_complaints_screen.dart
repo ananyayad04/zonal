@@ -3,18 +3,22 @@ import 'package:provider/provider.dart';
 
 import '../../core/api_client.dart';
 import '../../core/models.dart';
+import '../../core/palette.dart';
+import '../../core/session.dart';
 import '../../shared/allotment_details_sheet.dart';
 import '../../shared/complaint_card.dart';
 import '../../shared/pick_any_worker_sheet.dart';
 import '../../shared/ui.dart';
 import '../shared/complaint_detail_screen.dart';
+import '../warden/warden_approval_sheet.dart';
 
 const _needsAllotment = {'ALLOTTED_TO_HOSTEL_STAFF', 'ESCALATED', 'REOPENED'};
 
 /// Admin and Worker Supervisor's view across every hostel at once - the
 /// campus-wide counterpart to a Warden's own (single-hostel) home screen.
-/// Allotment only: approving finished work stays Warden-only, so a WORK_DONE
-/// item here carries no action, just the status.
+/// Approving finished work stays Warden-or-Supervisor (the backend guard on
+/// /hostel/complaints/:id/approve), not Admin - so the action only appears
+/// when a Worker Supervisor is the one looking at this shared screen.
 class HostelComplaintsScreen extends StatefulWidget {
   const HostelComplaintsScreen({super.key});
 
@@ -78,8 +82,15 @@ class _HostelComplaintsScreenState extends State<HostelComplaintsScreen> {
     }
   }
 
+  Future<void> _decide(Complaint c, bool satisfied) async {
+    final done = await WardenApprovalSheet.show(context, complaint: c, satisfied: satisfied);
+    if (done == true) await _refresh();
+  }
+
   @override
   Widget build(BuildContext context) {
+    final isSupervisor = context.watch<Session>().role == Role.workerSupervisor;
+
     return Scaffold(
       appBar: AppBar(title: const Text('Hostel complaints')),
       body: FutureBuilder<List<Complaint>>(
@@ -119,7 +130,36 @@ class _HostelComplaintsScreenState extends State<HostelComplaintsScreen> {
                             icon: const Icon(Icons.person_add_alt, size: 19),
                             label: const Text('Allot to a worker'),
                           )
-                        : null,
+                        : (isSupervisor && c.status == 'WORK_DONE')
+                            ? Row(
+                                children: [
+                                  Expanded(
+                                    child: FilledButton.icon(
+                                      style: FilledButton.styleFrom(
+                                        backgroundColor: Palette.good,
+                                        minimumSize: const Size.fromHeight(42),
+                                      ),
+                                      onPressed: () => _decide(c, true),
+                                      icon: const Icon(Icons.check, size: 18),
+                                      label: const Text('Approve'),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: OutlinedButton.icon(
+                                      style: OutlinedButton.styleFrom(
+                                        foregroundColor: Palette.serious,
+                                        side: const BorderSide(color: Palette.serious),
+                                        minimumSize: const Size.fromHeight(42),
+                                      ),
+                                      onPressed: () => _decide(c, false),
+                                      icon: const Icon(Icons.replay, size: 18),
+                                      label: const Text('Send back'),
+                                    ),
+                                  ),
+                                ],
+                              )
+                            : null,
                   );
                 },
               ),

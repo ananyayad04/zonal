@@ -9,12 +9,15 @@ import '../../shared/ui.dart';
 import '../resident/satisfaction_sheet.dart';
 import '../shared/complaint_detail_screen.dart';
 
-/// Work orders the supervisor created themselves, finished by a worker and
-/// sitting at WORK_DONE - the same "please confirm" queue a citizen sees for
-/// their own complaints, since the supervisor IS the reporter on a work
-/// order. Reuses GET /complaints/awaiting-confirmation and
-/// POST /:id/satisfaction as-is - both key on reporterId, not role, so
-/// nothing on the backend needed to change for this to work.
+/// Every non-hostel complaint sitting at WORK_DONE, campus-wide - a
+/// Supervisor may approve or send back any of them, not just the work
+/// orders they created themselves, since a citizen reporter can be slow to
+/// respond and the Supervisor is watching allotted work generally. Hostel
+/// complaints are excluded - those go through HostelComplaintsScreen
+/// instead, since a hostel complaint's approval flow is different (Warden
+/// or Supervisor, no citizen confirm/reopen step). Reuses
+/// POST /complaints/:id/satisfaction as-is - it now allows a Supervisor
+/// regardless of who filed the complaint, not just their own reports.
 class MyWorkApprovalsScreen extends StatefulWidget {
   const MyWorkApprovalsScreen({super.key});
 
@@ -32,8 +35,13 @@ class _MyWorkApprovalsScreenState extends State<MyWorkApprovalsScreen> {
   }
 
   Future<List<Complaint>> _load() async {
-    final res = await context.read<ApiClient>().get('/complaints/awaiting-confirmation');
-    return (res['complaints'] as List).map((c) => Complaint.fromJson(c as Map<String, dynamic>)).toList();
+    final res = await context
+        .read<ApiClient>()
+        .get('/admin/complaints', query: {'status': 'WORK_DONE'});
+    return (res['complaints'] as List)
+        .map((c) => Complaint.fromJson(c as Map<String, dynamic>))
+        .where((c) => !c.isHostelComplaint)
+        .toList();
   }
 
   Future<void> _refresh() async {
@@ -51,7 +59,7 @@ class _MyWorkApprovalsScreenState extends State<MyWorkApprovalsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('My work orders')),
+      appBar: AppBar(title: const Text('Awaiting approval')),
       body: FutureBuilder<List<Complaint>>(
         future: _future,
         builder: (context, snapshot) => AsyncBody<List<Complaint>>(
@@ -62,8 +70,9 @@ class _MyWorkApprovalsScreenState extends State<MyWorkApprovalsScreen> {
               return const EmptyState(
                 icon: Icons.fact_check_outlined,
                 title: 'Nothing waiting on you',
-                subtitle: 'Work orders you created appear here once a worker '
-                    'finishes them, for you to approve or send back.',
+                subtitle: 'Any complaint or work order finished by a worker appears '
+                    'here for you to approve or send back, not just the ones you '
+                    'created yourself.',
               );
             }
 
